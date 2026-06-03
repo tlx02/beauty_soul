@@ -1,0 +1,6 @@
+.DS_Store
+code/secrets.json
+code/__pycache__/
+*.pyc
+*.zip
+source_games/
