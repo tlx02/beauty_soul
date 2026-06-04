@@ -60,9 +60,8 @@ Consider: the game's genre, mechanics, tone, and target audience. Pick a specifi
 "space odyssey", "tropical island resort") — not a generic one like "colorful" or "fun".
 
 Also decide the best aspect ratio and container width for this game:
-- "9/16" portrait, max_width 480 — for touch puzzle, card, casual, or vertical scroll games
-- "1/1" square, max_width 520 — for board games, grid games, or symmetrical games
-- "16/9" landscape, max_width 800 — for side-scrollers, racing, or wide-canvas games
+- "9/16" portrait, max_width 480 — for most games: puzzle, card, casual, board, grid, or vertical games
+- "16/9" landscape, max_width 800 — only for side-scrollers, racing, or games that require a wide canvas
 Choose whichever best matches how the game is naturally played.
 
 Return ONLY valid JSON — no markdown, no explanation:
@@ -84,11 +83,11 @@ GOAL: The game must have EXACTLY these 3 screens — no more, no less.
 ━━━ SCREEN 1 — Title Screen ━━━
 Give its outer div: id="screen-home" class="screen"
 Required child elements (in this order, vertically centred):
-  <h1 class="game-title">[Game Name]</h1>
-  <img class="game-preview" src="assets/images/game_preview.png" alt="icon">
-  <button id="btn-start" class="btn-primary">PLAY</button>
+  <img class="game-title" src="assets/images/title.png" alt="[Game Name]">
+  <img class="game-preview" src="assets/images/game_preview.png" alt="preview">
+  <button id="btn-start"><img src="assets/images/btn_play.png" alt="PLAY"></button>
 If a title screen exists, reshape it to include the above. If not, create one.
-The PLAY button must call the same JS function that starts the game.
+The button id="btn-start" must call the same JS function that starts the game.
 
 ━━━ SCREEN 2 — Gameplay Screen ━━━
 Give its outer div: id="screen-game" class="screen"
@@ -168,7 +167,7 @@ Return ONLY a single improved <style> block — nothing else, no explanation.
 ━━━ SCREEN LAYOUT ━━━
 The game uses a responsive container: aspect ratio {aspect_w}:{aspect_h}, max width {max_width}px, full viewport height.
 Design all layout, font sizes, and element sizes to fill and suit this shape.
-All sizing inside screens should use relative units (%, em, rem, vw, vh, or flex) — not fixed pixels.
+All sizing inside screens should use relative units — not fixed pixels. Use %, em, rem for elements inside the container. Avoid vw/vh for elements inside screens — those scale with the viewport, not the container, and will overflow on wide displays.
 
 Apply this theme consistently across all 3 screens. Every colour, font, and spacing choice
 must feel intentional and part of this specific theme — not generic.
@@ -177,22 +176,26 @@ must feel intentional and part of this specific theme — not generic.
 - Every screen must use the full viewport height — spread content vertically across the screen with generous spacing, never cluster everything in the centre; content is horizontally centred
 - Max content width: {max_width}px, centred with margin: 0 auto — prevents content stretching on wide displays
 - Do NOT set different width or height values on individual screen IDs — the .screen class handles all screen sizing uniformly; all screens must be the same size
+- Do NOT override .screen padding — it is already set by the template
 - All interactive elements must have clear visual affordance (hover states, active states)
 - All text must be clearly legible against the background image — ensure sufficient contrast through colour choice, text-shadow, or backdrop as appropriate
 
 ━━━ ASSET-AWARE RULES (title screen) ━━━
-  The title screen has THREE image assets already handled externally — style them as image containers:
-  - .game-title: will be replaced by title.png (a logo image). Style as an image container:
-    display:block, max-width proportional to the screen width, height:auto, margin:0 auto,
-    subtle drop-shadow. Do NOT set font-size, color, or text properties on it.
-  - .game-preview: displays game_preview.png (a square gameplay illustration). Style with a fixed
-    size (around 35-45% of the container width), object-fit:contain, centred, subtle drop-shadow.
-  - #btn-start ONLY: will be replaced by btn_play.png (a button image). Style #btn-start as a
-    transparent image button: background:transparent, border:none, padding:0, cursor:pointer,
-    max-width proportional to the screen, display:block, margin:0 auto. Add hover scale transform.
-    Do NOT add background colour, border-radius fill, or padding to #btn-start.
+  The title screen already has THREE <img> elements — style them as image containers only:
+  - .game-title: an <img> tag showing the game title logo. Style as: display:block, max-width
+    proportional to the screen width, height:auto, margin:0 auto. Do NOT set font-size, color,
+    text properties, filter, drop-shadow, or glow effects — the image has its own visual design.
+  - .game-preview: an <img> tag showing a gameplay preview. Style with a proportional size
+    (around 35-45% of the container width), object-fit:contain, centred. Do NOT use box-shadow
+    — it draws a visible rectangle around the element regardless of image transparency. If a
+    shadow is needed for depth, use filter:drop-shadow() which follows the image alpha channel.
+  - #btn-start: a <button> containing an <img>. Style as: background:transparent, border:none,
+    padding:0, cursor:pointer, -webkit-appearance:none, appearance:none, max-width proportional
+    to the screen, display:block, margin:0 auto. Add hover scale transform only.
+    Do NOT add background colour, box-shadow, glow, filter, or drop-shadow — the button image
+    has its own visual design. The appearance reset is critical to remove browser default button styling.
   - .btn-primary (other buttons, e.g. PLAY AGAIN): style as a normal themed button with background
-    colour, padding, border-radius — these do NOT have image replacements.
+    colour, padding, border-radius — these are text buttons without image replacements.
 
 ━━━ SCREEN-SPECIFIC RULES ━━━
   #screen-home (Title):
@@ -200,7 +203,9 @@ must feel intentional and part of this specific theme — not generic.
 
   #screen-game (Gameplay):
     - Do NOT override background or add decorative chrome that competes with gameplay
+    - #screen-game must keep align-items: center — all child elements must be horizontally centred
     - Canvas: background transparent; centred with display:block margin:0 auto
+    - All game containers (boards, grids, canvas wrappers, buttons) must be centred — use margin:0 auto or align-self:center; never leave them left-aligned
     - Game elements (canvas, board, grid) must use max-width/max-height or vw/vh units to scale down and fit within the viewport — never use fixed pixel sizes that exceed the screen
     - HUD / score bar: compact, proportionally small relative to the screen height, semi-transparent overlay — never obscures play area
     - Enough padding around the game area so nothing touches screen edges
@@ -214,7 +219,7 @@ must feel intentional and part of this specific theme — not generic.
 - The result must look like a professionally designed indie game, NOT an AI-generated template
 - Avoid: rainbow gradients, excessive glow effects, mismatched font weights, clashing colours
 - Transitions: subtle fade or slide between screens (opacity/transform, 0.25-0.35s ease)
-- .screen: already has background-image — do NOT override it; just ensure background-size: cover
+- .app-container already has background-image — do NOT add background-image to .screen or individual screen IDs
 
 Keep all existing class names and IDs — only change visual properties."""
 
@@ -284,12 +289,10 @@ Paths: images at "assets/images/<filename>", audio at "assets/audio/<filename>".
 The screen is {aspect_w}:{aspect_h} aspect ratio, max width {max_width}px — size all assets proportionally to this.
 
 ALREADY WIRED BY TEMPLATE — do NOT add again:
-  - assets/images/background.png  (referenced via CSS .screen background-image)
-  - assets/images/game_preview.png        (referenced as <img class="game-preview"> on the title screen)
-
-WIRE THESE INTO THE TITLE SCREEN (screen-home):
-  - assets/images/title.png — replace the <h1 class="game-title"> text with an <img> tag pointing to the file. Size it with max-width and height:auto so it displays at a natural readable size.
-  - assets/images/btn_play.png — replace the <button id="btn-start"> content with an <img> tag pointing to the file. Make the button itself background:transparent, border:none, padding:0, cursor:pointer. Size the img using max-width and height:auto so it displays at a natural readable size without relying on percentage widths against an unsized parent.
+  - assets/images/background.png  (referenced via CSS .app-container background-image)
+  - assets/images/game_preview.png (referenced as <img class="game-preview"> on the title screen)
+  - assets/images/title.png        (referenced as <img class="game-title"> on the title screen)
+  - assets/images/btn_play.png     (referenced as <img> inside <button id="btn-start"> on the title screen)
 
 WHAT YOU MUST WIRE — game-specific sprites and audio only:
   Asset manifest: {manifest}
@@ -320,10 +323,8 @@ ALIGNMENT:
   - Canvas sprites: draw centred on the object's (x, y) position using (x - drawW/2, y - drawH/2)
 
 CSS CONFLICT RESOLUTION:
-  Whenever an image asset replaces a DOM element, remove any CSS that would visually conflict with it:
-  - For any element receiving an image: set background:transparent, border:none, padding:0 on that element
-    so the pre-existing CSS background/border does not show behind the transparent image
-  - This applies to all image replacements — buttons, headings, containers, any DOM element
+  For any DOM element receiving a sprite image, remove conflicting CSS background/border/padding
+  so the pre-existing styles do not show behind the transparent image.
 
 Do NOT restructure screens, change game logic, or re-add background/game_preview.
 Return ONLY the complete modified HTML. No explanation."""
