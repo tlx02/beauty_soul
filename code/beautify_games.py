@@ -53,7 +53,10 @@ client = OpenAI(
 
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 PASS0 = """\
-Analyse this HTML game and decide on the single best visual theme and layout for it.
+Analyse this HTML game (structure + game logic provided) and decide on the single best visual theme and layout.
+
+You will receive the HTML structure AND a truncated excerpt of the game's JavaScript so you can understand
+the actual mechanics — use this to make an informed aspect ratio decision.
 
 Consider: the game's genre, mechanics, tone, and target audience. Pick a specific, evocative theme
 (e.g. "deep-sea adventure", "retro neon arcade", "cozy autumn café", "minimalist zen garden",
@@ -62,7 +65,7 @@ Consider: the game's genre, mechanics, tone, and target audience. Pick a specifi
 Also decide the best aspect ratio and container width for this game:
 - "9/16" portrait, max_width 480 — for most games: puzzle, card, casual, board, grid, or vertical games
 - "16/9" landscape, max_width 800 — only for side-scrollers, racing, or games that require a wide canvas
-Choose whichever best matches how the game is naturally played.
+Choose whichever best matches how the game is naturally played. Read the JS mechanics to decide.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -123,6 +126,11 @@ Add this to the CSS (alongside existing styles — do not remove anything):
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
+    padding: max(env(safe-area-inset-top, 0px), 0px)
+             max(env(safe-area-inset-right, 0px), 0px)
+             max(env(safe-area-inset-bottom, 0px), 0px)
+             max(env(safe-area-inset-left, 0px), 0px);
+    box-sizing: border-box;
   }}
   .screen {{
     display: none;
@@ -136,22 +144,32 @@ Add this to the CSS (alongside existing styles — do not remove anything):
     overflow: hidden;
   }}
   .screen.active {{ display: flex; }}
+  #screen-game > * {{ max-width: 100%; overflow: hidden; }}
 
 ━━━ RULES ━━━
 - Remove: debug panels, settings, help screens, share buttons, extra navigation, tutorial overlays
 - Do NOT change game logic, scoring, physics, or timers
 - Preserve all existing IDs and class names that JS references — just add the new wrapper structure around them
+- Preserve level-progression and game-over advancement buttons (e.g. "Next Level", "Continue", "Next Stage") — move them into screen-gameover even if they came from result/settings screens being removed
 
 Return ONLY the complete modified HTML. No explanation."""
 
 PASS2 = """\
 You are a game developer doing a conservative bug-fix pass on an HTML game.
+
+CONTEXT: The game has been restructured into a 3-screen template:
+  - id="screen-home" (title screen) — shown on load, PLAY button starts game
+  - id="screen-game" (gameplay screen) — shown after PLAY is clicked
+  - id="screen-gameover" (game over screen) — shown when game ends
+  Screens are toggled via classList with class="screen active". Inactive screens have display:none.
+
 Fix ONLY issues that would prevent the game from running:
   - Undefined variables causing runtime errors
   - Broken or missing event listeners on interactive elements
   - Missing game-over/win condition (only if clearly absent and game is unfinishable)
   - Null/undefined reference errors
   - Score or timer not resetting on restart
+  - JS references to IDs that no longer exist in the DOM (e.g. removed settings/help panels)
 
 Leave anything ambiguous untouched. Do NOT change mechanics, difficulty, or intentional behaviour.
 Return ONLY the complete modified HTML. No explanation."""
@@ -206,7 +224,8 @@ must feel intentional and part of this specific theme — not generic.
     - #screen-game must keep align-items: center — all child elements must be horizontally centred
     - Canvas: background transparent; centred with display:block margin:0 auto
     - All game containers (boards, grids, canvas wrappers, buttons) must be centred — use margin:0 auto or align-self:center; never leave them left-aligned
-    - Game elements (canvas, board, grid) must use max-width/max-height or vw/vh units to scale down and fit within the viewport — never use fixed pixel sizes that exceed the screen
+    - Game elements (canvas, board, grid) must use max-width/max-height or % units to scale down and fit within the viewport — never use fixed pixel sizes that exceed the screen
+    - Every game container that holds game objects (board, play-area, grid, reel window, lane container, tile area) MUST have overflow:hidden in its CSS rule — this is mandatory to prevent game elements from rendering outside the container bounds
     - HUD / score bar: compact, proportionally small relative to the screen height, semi-transparent overlay — never obscures play area
     - Enough padding around the game area so nothing touches screen edges
 
@@ -335,10 +354,15 @@ The game has 3 screens: screen-home (title), screen-game (gameplay), screen-game
 
 Fix ONLY the following classes of bugs — do not change visuals, game logic, or asset references:
 
-1. SCREEN SHOWN ON LOAD
-   The very first screen shown must be screen-home. If any JS initialisation auto-starts the game
-   or calls showScreen('screen-game') / equivalent on page load, remove or replace it with
-   showScreen for the home screen (or ensure screen-home has class="screen active" and nothing overrides it).
+1. SCREEN ROUTING CORRECTNESS
+   a) On load: screen-home must be the first active screen. Remove any JS that auto-navigates to
+      screen-game on page load.
+   b) PLAY button: the #btn-start click/pointerdown handler must call the game's showScreen function
+      with the argument that resolves to id="screen-game". If the handler uses an old screen name
+      (e.g. 'gameplay', 'game-screen', 'play', 'board', or any name that is NOT the id "screen-game"),
+      update it to use the correct id or argument. Check ALL showScreen/showView/switchScreen calls
+      in the start-game handler and update them to target "screen-game".
+   c) Game-over: when the game ends, showScreen must target "screen-gameover".
 
 2. DOM MEASUREMENTS ON HIDDEN ELEMENTS
    Any function that reads layout dimensions (offsetWidth, offsetHeight, getBoundingClientRect,
@@ -357,6 +381,24 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    The PLAY button must always call newGame() or equivalent fresh-start function.
    Remove any continueGame() / loadGame() / resume logic from the PLAY button handler.
    Best-score localStorage is fine to keep; only remove saved board/progress state.
+
+5. CANVAS BACKGROUND VISIBILITY
+   If the game uses a canvas and clears it each frame with ctx.fillRect(0, 0, W, H) using a solid
+   colour, replace that line with ctx.clearRect(0, 0, W, H) so the background.png behind the canvas
+   shows through. If a semi-transparent overlay is needed for readability, use fillStyle with alpha
+   (e.g. 'rgba(0,0,0,0.3)') instead of a solid colour.
+
+6. AUDIO UNLOCK ON FIRST GESTURE
+   If the game uses AudioContext or webkitAudioContext, add an audio unlock handler if not already
+   present. At the end of the script, add a self-executing function that listens for the first
+   pointerdown event, resumes any suspended AudioContext, and removes itself. Use "once: true" on
+   the event listener. Find the existing AudioContext variable name in the code and call .resume() on it,
+   OR create a temporary AudioContext just to unlock it.
+
+7. GAME-OVER SCREEN COMPLETENESS
+   Ensure screen-gameover has: (a) a visible final score or result, (b) a working PLAY AGAIN button
+   that calls the game's restart function. If the original game had a "Next Level" or progression
+   button, preserve it in screen-gameover so players can advance.
 
 Return ONLY the complete modified HTML. No explanation."""
 
@@ -384,12 +426,48 @@ def html_skeleton(html: str) -> str:
     """Return a condensed structural summary of the HTML for context (no scripts)."""
     no_scripts = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
     no_styles  = re.sub(r'<style[^>]*>.*?</style>',  '', no_scripts, flags=re.DOTALL | re.IGNORECASE)
-    # Collapse whitespace
     skeleton = re.sub(r'\n\s*\n', '\n', no_styles).strip()
-    # Truncate to keep context reasonable
     if len(skeleton) > 6000:
         skeleton = skeleton[:6000] + "\n...[truncated for brevity]"
     return skeleton
+
+def analyze_game(html: str) -> dict:
+    """Static analysis — deterministic game type classification, zero LLM cost."""
+    has_canvas     = bool(re.search(r'<canvas\b', html, re.IGNORECASE))
+    has_getcontext = bool(re.search(r"getContext\s*\(\s*['\"]2d['\"]", html))
+    uses_dom_meas  = bool(re.search(r'offsetWidth|offsetHeight|getBoundingClientRect|clientWidth|clientHeight', html))
+    has_touch      = bool(re.search(r'touchstart|touchend|touchmove|pointerdown|pointermove|pointerup', html))
+    has_levels     = bool(re.search(r'next.?level|nextLevel|nextStage|levelUp|level\s*\+\+|advance', html, re.IGNORECASE))
+    has_solid_fill = bool(re.search(r'ctx\.fillRect\s*\(\s*0\s*,\s*0\s*,', html))
+    has_audio_ctx  = bool(re.search(r'AudioContext|webkitAudioContext', html))
+    has_audio_el   = bool(re.search(r'new Audio\s*\(', html))
+    has_drag       = bool(re.search(r'pointerdown.*drag|drag.*pointerdown|mousedown.*drag|addEventListener.*drag', html, re.IGNORECASE | re.DOTALL))
+
+    if has_canvas and has_getcontext and uses_dom_meas:
+        render_type = "mixed"
+    elif has_canvas and has_getcontext:
+        render_type = "canvas"
+    else:
+        render_type = "dom"
+
+    return {
+        "render_type":       render_type,
+        "has_canvas":        has_canvas,
+        "uses_dom_meas":     uses_dom_meas,
+        "has_touch":         has_touch,
+        "has_levels":        has_levels,
+        "has_solid_fill":    has_solid_fill,
+        "has_audio_ctx":     has_audio_ctx,
+        "has_audio_el":      has_audio_el,
+        "has_drag":          has_drag,
+    }
+
+def game_context_for_pass0(html: str) -> str:
+    """Build richer Pass 0 input: structure + first 12000 chars of JS for mechanic understanding."""
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+    js = '\n'.join(scripts)[:12000]
+    struct = html_skeleton(html)
+    return f"=== HTML STRUCTURE ===\n{struct}\n\n=== GAME LOGIC (truncated) ===\n{js}"
 
 # ─── LLM helper ───────────────────────────────────────────────────────────────
 def _strip_fences(text: str) -> str:
@@ -416,6 +494,63 @@ def _fix_screen_backgrounds(html: str) -> str:
         prev = html
         html = _SCREEN_BG_RE.sub(r'\1\2', html)
     return html
+
+def fix_css_issues(html: str) -> str:
+    """Regex-based post-processor: remove known bad CSS patterns after Pass 3."""
+    css, html_template = extract_css(html)
+    if not css:
+        return html
+
+    # 1. Remove box-shadow from image asset containers (creates visible rectangles on transparent images)
+    for sel in [r'\.game-title', r'\.game-preview', r'#btn-start']:
+        css = re.sub(rf'({sel}\s*\{{[^}}]*?)box-shadow\s*:[^;]+;', r'\1', css, flags=re.DOTALL)
+
+    # 2. Remove filter with drop-shadow/glow from image title/preview (amplifies existing glow in image)
+    for sel in [r'\.game-title', r'\.game-preview']:
+        css = re.sub(rf'({sel}\s*\{{[^}}]*?)filter\s*:[^;]+;', r'\1', css, flags=re.DOTALL)
+
+    # 3. Replace vw in font-size clamp() with % so it scales with container not viewport
+    css = re.sub(r'(font-size\s*:\s*clamp\([^,]+,\s*)(\d+\.?\d*)vw', r'\1\2%', css)
+    css = re.sub(r'(min-width\s*:\s*clamp\([^,]+,\s*)(\d+\.?\d*)vw',  r'\1\2%', css)
+
+    # 4. Remove opacity:0 from .screen base rule (makes initial active screen invisible)
+    css = re.sub(r'(\.screen\s*\{[^}]*?)opacity\s*:\s*0\s*;', r'\1', css, flags=re.DOTALL)
+
+    # 5. Remove padding overrides on .screen (PASS1 template already sets padding:24px)
+    css = re.sub(r'((?:^|\})\s*\.screen\s*\{[^}]*?)padding\s*:[^;]+;', r'\1', css, flags=re.DOTALL | re.MULTILINE)
+
+    # 6. Replace explicit pixel widths > 480px on game containers with max-width to prevent overflow
+    #    e.g. width: 720px → max-width: 100%; width: 100%
+    def replace_wide_widths(m):
+        val = int(m.group(1))
+        if val > 480:
+            return f'max-width: 100%; width: 100%'
+        return m.group(0)
+    css = re.sub(r'(?<!\-)width\s*:\s*(\d+)px', replace_wide_widths, css)
+
+    # 7. Ensure grid/calendar containers don't overflow — add max-width:100% to common grid wrappers
+    for grid_sel in [r'\.calendar', r'\.grid', r'\.days-grid', r'\.card-grid', r'\.board-grid']:
+        css = re.sub(
+            rf'({grid_sel}\s*\{{)',
+            r'\1 max-width: 100%; overflow: hidden;',
+            css, flags=re.DOTALL
+        )
+
+    # 7. Fix overlay layers (#tiles, #tile-layer, #pieces-layer, etc.) that must overlap #cells
+    #    PASS3 often assigns position:relative to both layers, stacking them vertically.
+    #    Replace position:relative on any *-layer or #tiles selector with absolute overlay.
+    for overlay_sel in [r'#tiles\b', r'#tile-layer\b', r'#pieces-layer\b', r'#overlay\b', r'#animations\b']:
+        css = re.sub(
+            rf'({overlay_sel}\s*\{{[^}}]*?)position\s*:\s*relative\s*;',
+            r'\1position: absolute; top: 0; left: 0;',
+            css, flags=re.DOTALL
+        )
+
+    # Always append structural guardrail last (wins by cascade order over same-specificity PASS3 rules)
+    css += "\n/* ── structural guardrail ── */\n"
+    css += "#screen-game > * { max-width: 100% !important; overflow: hidden !important; }\n"
+
+    return inject_css(html_template, f"<style>\n{css.strip()}\n</style>")
 
 def call_llm(system: str, html: str, label: str, max_tokens: int = MAX_TOKENS) -> str | None:
     try:
@@ -539,12 +674,21 @@ def beautify(src_dir: Path) -> bool:
 
     html = latest_html()
 
+    # ── Pre-pass: static game analysis (zero cost, deterministic) ────────────
+    game_meta = prog.get("game_meta")
+    if not game_meta:
+        game_meta = analyze_game(html)
+        prog["game_meta"] = game_meta
+        save_prog()
+    render_type = game_meta.get("render_type", "dom")
+    print(f"    ○ game type: {render_type} | canvas={game_meta.get('has_canvas')} | dom_meas={game_meta.get('uses_dom_meas')} | levels={game_meta.get('has_levels')}")
+
     # ── Pass 0: determine visual theme + screen size ─────────────────────────
     theme_json = prog.get("theme_json")
     if not theme_json:
         print("    → Pass 0: determine visual theme + screen size")
-        skeleton = html_skeleton(html)
-        r = call_llm(PASS0, skeleton, "pass0", max_tokens=512)
+        pass0_input = game_context_for_pass0(html)  # structure + JS excerpt
+        r = call_llm(PASS0, pass0_input, "pass0", max_tokens=1024)
         if r:
             try:
                 raw = _strip_fences(r)
@@ -604,6 +748,7 @@ def beautify(src_dir: Path) -> bool:
         r = call_llm(prompt3, content, "pass3", max_tokens=8192)
         if r:
             html = inject_css(html_template, r)
+            html = fix_css_issues(html)   # remove known bad CSS patterns
             (out_dir / "index_pass3.html").write_text(html, encoding="utf-8")
             prog["pass3"] = True
         else:
@@ -631,12 +776,24 @@ def beautify(src_dir: Path) -> bool:
             img_dir.mkdir(parents=True, exist_ok=True)
             aud_dir.mkdir(parents=True, exist_ok=True)
 
+            failed_images = set()
             for img in manifest.get("images", []):
                 fname = img["filename"]
                 is_bg = fname == "background.png"
                 print(f"    → Pass 4b: image  {fname}{'' if is_bg else ' (transparent)'}")
-                gen_image(img["description"], img_dir / fname, transparent=not is_bg)
+                ok = gen_image(img["description"], img_dir / fname, transparent=not is_bg)
+                if not ok:
+                    # Retry once on failure
+                    time.sleep(2)
+                    ok = gen_image(img["description"], img_dir / fname, transparent=not is_bg)
+                if not ok:
+                    failed_images.add(fname)
                 time.sleep(1)
+
+            # Remove failed images from manifest before wiring
+            if failed_images:
+                manifest["images"] = [i for i in manifest["images"] if i["filename"] not in failed_images]
+                print(f"    ⚠  skipping {len(failed_images)} failed image(s) in wiring: {failed_images}")
 
             for aud in manifest.get("audio", []):
                 print(f"    → Pass 4c: audio  {aud['filename']}")
@@ -663,7 +820,18 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 5: playability QA ────────────────────────────────────────────────
     if not prog.get("pass5"):
         print("    → Pass 5: playability QA")
-        r = call_llm(PASS5, html, "pass5", max_tokens=65536)
+        # Prepend game_meta context so Pass 5 can apply targeted checks
+        meta_note = (
+            f"GAME ANALYSIS: render_type={game_meta.get('render_type')}, "
+            f"uses_dom_measurements={game_meta.get('uses_dom_meas')}, "
+            f"has_solid_canvas_fill={game_meta.get('has_solid_fill')}, "
+            f"has_audio_context={game_meta.get('has_audio_ctx')}, "
+            f"has_audio_elements={game_meta.get('has_audio_el')}, "
+            f"has_level_progression={game_meta.get('has_levels')}, "
+            f"has_drag_interaction={game_meta.get('has_drag')}\n\n"
+        )
+        pass5_input = meta_note + html
+        r = call_llm(PASS5, pass5_input, "pass5", max_tokens=65536)
         if r:
             html = r
             prog["pass5"] = True
@@ -684,6 +852,7 @@ def main():
     grp.add_argument("--game",  type=str, metavar="NAME",  help="Process one specific game")
     grp.add_argument("--all",   action="store_true",       help="Process all 300 games")
     ap.add_argument("--resume", action="store_true", help="Skip games already through pass 3")
+    ap.add_argument("--offset", type=int, default=0, metavar="N", help="Skip first N games (for parallel batches)")
     args = ap.parse_args()
 
     scored_path = SELECTED / "scored_games.json"
@@ -696,9 +865,9 @@ def main():
     if args.game:
         games = [SELECTED / args.game]
     elif args.pilot:
-        games = [SELECTED / g["name"] for g in scored[:args.pilot]]
+        games = [SELECTED / g["name"] for g in scored[args.offset:args.offset + args.pilot]]
     else:
-        games = [SELECTED / g["name"] for g in scored]
+        games = [SELECTED / g["name"] for g in scored[args.offset:]]
 
     BEAUTIFIED.mkdir(exist_ok=True)
     ok = fail = 0
