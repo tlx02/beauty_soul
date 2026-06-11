@@ -167,7 +167,12 @@ Fix ONLY issues that would prevent the game from running:
   - Undefined variables causing runtime errors
   - Broken or missing event listeners on interactive elements
   - Missing game-over/win condition (only if clearly absent and game is unfinishable)
-  - Null/undefined reference errors
+  - Null/undefined reference errors — especially any that would crash on startup before the
+    game is playable (e.g. getElementById returning null because the element was removed, or
+    accessing .classList/.style on a null element). Add null guards: `if (el) el.classList...`
+  - Instant game-over on start: if a death/fail condition can trigger on the very first frame
+    before the player has any chance to act (e.g. a platform color mismatch on tick 1), add a
+    brief grace period counter: skip the fail check for the first 3-5 frames after game start
   - Score or timer not resetting on restart
   - JS references to IDs that no longer exist in the DOM (e.g. removed settings/help panels)
 
@@ -355,14 +360,23 @@ The game has 3 screens: screen-home (title), screen-game (gameplay), screen-game
 Fix ONLY the following classes of bugs — do not change visuals, game logic, or asset references:
 
 1. SCREEN ROUTING CORRECTNESS
-   a) On load: screen-home must be the first active screen. Remove any JS that auto-navigates to
-      screen-game on page load.
-   b) PLAY button: the #btn-start click/pointerdown handler must call the game's showScreen function
-      with the argument that resolves to id="screen-game". If the handler uses an old screen name
-      (e.g. 'gameplay', 'game-screen', 'play', 'board', or any name that is NOT the id "screen-game"),
-      update it to use the correct id or argument. Check ALL showScreen/showView/switchScreen calls
-      in the start-game handler and update them to target "screen-game".
-   c) Game-over: when the game ends, showScreen must target "screen-gameover".
+   a) On load — static HTML: ensure the screen-home div has class="screen active" in the HTML
+      attribute itself, not just via JS. If the div only has class="screen" without "active",
+      add "active" directly to the class attribute in the HTML.
+   b) On load — JS: remove any JS that auto-navigates away from screen-home on page load.
+   c) PLAY button — direct navigation: the #btn-start click/pointerdown handler must navigate
+      DIRECTLY to screen-game in ONE step. If it currently shows an intermediate screen first
+      (e.g., a betting screen, difficulty select, category select, or any screen that is not
+      screen-game), change the handler to skip all intermediate screens and call the game's
+      start function + show screen-game directly. Apply sensible defaults for any parameters
+      the intermediate screen was collecting (e.g., default bet=10, default difficulty='normal').
+   d) PLAY button — ID convention: check how the game's showScreen/goto/nav helper function
+      constructs element IDs. If it prepends 'screen-' to its argument (e.g., function goto(name)
+      { getElementById('screen-'+name) }), then ALL calls to it must pass the bare name
+      ('game', 'home', 'gameover'), NOT the full ID ('screen-game'). Fix any double-prefix bugs
+      where the caller passes 'screen-game' but the helper already adds 'screen-'.
+   e) Game-over: ensure the game-over transition calls the navigation helper with the correct
+      argument that resolves to id="screen-gameover".
 
 2. DOM MEASUREMENTS ON HIDDEN ELEMENTS
    Any function that reads layout dimensions (offsetWidth, offsetHeight, getBoundingClientRect,
@@ -396,9 +410,13 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    OR create a temporary AudioContext just to unlock it.
 
 7. GAME-OVER SCREEN COMPLETENESS
-   Ensure screen-gameover has: (a) a visible final score or result, (b) a working PLAY AGAIN button
-   that calls the game's restart function. If the original game had a "Next Level" or progression
-   button, preserve it in screen-gameover so players can advance.
+   Inspect the STATIC HTML of #screen-gameover right now. If it contains NO interactive element
+   (no <button>, no <div onclick>, no <div onpointerdown>, no <a>) that restarts or advances the
+   game, inject one: <button class="btn-primary" onclick="[restart_fn]()">PLAY AGAIN</button>
+   where [restart_fn] is the game's restart/new-game function name (find it in the JS). Do this
+   even if the game-over screen has not been triggered during testing — check the static DOM.
+   Also ensure: (a) a visible final score or result display exists, (b) if the game had level
+   progression buttons, preserve them.
 
 Return ONLY the complete modified HTML. No explanation."""
 
@@ -548,7 +566,13 @@ def fix_css_issues(html: str) -> str:
 
     # Always append structural guardrail last (wins by cascade order over same-specificity PASS3 rules)
     css += "\n/* ── structural guardrail ── */\n"
+    css += "#screen-game { overflow: hidden !important; }\n"
     css += "#screen-game > * { max-width: 100% !important; overflow: hidden !important; }\n"
+    # Also strip any overflow:visible declarations from within screen-game scope
+    css = re.sub(
+        r'(#screen-game[^{]*\{[^}]*?)overflow\s*:\s*visible\s*;',
+        r'\1', css, flags=re.DOTALL
+    )
 
     return inject_css(html_template, f"<style>\n{css.strip()}\n</style>")
 
