@@ -275,17 +275,29 @@ REQUIRED — always include all four:
      Style: an attractive pill or badge shape with "PLAY" text, consistent with the approved theme.
      Transparent background, clean edges.
 
-OPTIONAL game sprites — include as many as genuinely improve the visual quality.
-  Be selective — only include a sprite when an image genuinely improves the visual quality.
-  Ask: would replacing this element with a single image make it look better, or would it destroy
-  information the player needs (e.g. colour coding, number labels, state differentiation)?
+OPTIONAL UI CHROME — panels, HUD frames, popups. These make the game feel real instead of CSS-only.
+  Generate decorative background images for UI containers that currently look plain.
+  Look for these in the HTML structure and generate one image per container:
+  - Score/HUD panel: the box showing score, timer, lives, level — a styled frame/badge background
+  - Game-over popup panel: the card/modal that shows "Game Over" + final score + replay button
+  - Win/congratulations popup panel: same treatment as game-over if distinct
+  - Pause menu panel: if the game has one
+  - Any other prominent UI container that would benefit from a polished frame
+  CRITICAL RULES for UI chrome:
+  - DECORATIVE FRAME ONLY — describe the shape, texture, colour. NO text, NO numbers, NO icons
+    baked into the image. Live data (score values, button labels) is rendered by HTML on top.
+  - transparent: true always (these overlay on the background)
+  - "usage" field must name the HTML element ID or class it wraps (e.g. "#score-panel", ".gameover-card")
+  - Keep sizing proportional: a HUD bar might be ~480×80px; a popup card ~360×480px
+
+OPTIONAL game sprites — be selective.
   Only replace elements that are visually generic (plain shapes, solid colours) and would benefit
   from an illustrated version. Never replace elements whose visual variety IS the game mechanic.
-  IMPORTANT: if different instances of the same element need different colours (e.g. coloured balls,
-  coloured gems, coloured tiles), do NOT generate a sprite for it — even if you think runtime tinting
-  could work. Runtime colour tinting is not reliably implemented. Leave colour-differentiated elements
-  as native canvas/CSS rendering.
-  Only include sprites the game actually draws/renders. Describe each with:
+  If different instances need different colours (coloured balls, gems, tiles), skip it — runtime
+  tinting is unreliable. Leave colour-differentiated elements as CSS.
+  NEVER generate: empty grid cells, blank tile placeholders, board cell backgrounds — CSS handles
+  these. Only generate sprites for game pieces with actual content (character, projectile, collectible).
+  Describe each with:
   - Exact neutral orientation (the game rotates at runtime — generate axis-aligned)
   - Colour palette consistent with the approved theme
   - Clean edges suitable for transparent-background PNG
@@ -293,8 +305,8 @@ OPTIONAL game sprites — include as many as genuinely improve the visual qualit
 AUDIO — up to 5 sound effects. Minimum duration 1.0 seconds each.
 
 For each image, include a "transparent" field:
-  true  — needs transparent background (logos, buttons, sprites, overlays)
-  false — opaque background (background.png, any scene/environment images)
+  true  — needs transparent background (logos, buttons, UI panels, sprites)
+  false — opaque background (background.png only)
 
 Return ONLY valid JSON — no markdown fences, no explanation:
 {{
@@ -304,7 +316,9 @@ Return ONLY valid JSON — no markdown fences, no explanation:
     {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": false}},
     {{"filename": "title.png", "description": "...", "usage": "stylised game title logo on title screen", "transparent": true}},
     {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true}},
-    ...optional game sprites...
+    {{"filename": "hud_panel.png", "description": "decorative frame for score display — no text or numbers", "usage": "#score-panel or .hud-bar", "transparent": true}},
+    {{"filename": "gameover_panel.png", "description": "styled card frame for game-over popup — no text", "usage": ".gameover-card or #gameover-popup", "transparent": true}},
+    ...optional sprites...
   ],
   "audio": [
     {{"filename": "sfx_name.mp3", "description": "...", "duration_seconds": 1.0}}
@@ -345,14 +359,25 @@ RULES:
     - Call snd.play() / snd.currentTime = 0; snd.play() at the appropriate game events
     - For background music: set snd.loop = true; snd.play() when gameplay starts
 
+UI CHROME PANELS (HUD frames, popups, score cards):
+  For each panel/HUD image in the manifest, wire it as a CSS background-image on the target element
+  named in the "usage" field. Rules:
+  - background-image: url('assets/images/panel.png')
+  - background-size: 100% 100%  (fills the container exactly — never "auto" or "cover")
+  - background-repeat: no-repeat
+  - position: relative on the container so children stack on top
+  - Keep ALL child elements (text, buttons, scores) fully visible — do NOT hide or remove them
+  - Remove any conflicting CSS background-color from that element (the image replaces it)
+  - If the container has no explicit size, add min-height to ensure the panel image is visible
+
 ALIGNMENT:
   - All wired sprites must appear visually centred on their game object — never offset or clipped
   - DOM sprite <img> tags: set display:block, object-fit:contain, and match the container's dimensions
   - Canvas sprites: draw centred on the object's (x, y) position using (x - drawW/2, y - drawH/2)
 
 CSS CONFLICT RESOLUTION:
-  For any DOM element receiving a sprite image, remove conflicting CSS background/border/padding
-  so the pre-existing styles do not show behind the transparent image.
+  For any DOM element receiving a sprite or panel image, remove conflicting CSS background-color
+  and border so the pre-existing styles do not show behind the transparent image.
 
 Do NOT restructure screens, change game logic, or re-add background/game_preview.
 Return ONLY the complete modified HTML. No explanation."""
@@ -388,12 +413,18 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    Common pattern to fix: if newGame() / startGame() calls renderTray(), buildBoard(), or similar
    sizing functions BEFORE calling showScreen('screen-game'), reorder so showScreen is called first,
    then the sizing functions are called (use requestAnimationFrame or setTimeout(fn, 0) if needed).
+   CRITICAL: Remove any buildGrid() / buildBoard() / calculateDimensions() calls from image
+   onload / onerror / complete handlers at the top level (page load). These fire before any screen
+   is visible and measure 0px. Instead, ensure the PLAY button handler calls buildGrid() (or
+   equivalent) INSIDE the requestAnimationFrame, right before newGame()/startGame():
+     showScreen('game');
+     requestAnimationFrame(() => { buildGrid(); newGame(); });
 
 3. IMAGE LOAD PROMISES BLOCKING INIT
    If buildBoardDOM(), renderTray(), or equivalent init functions are gated inside a Promise.all
    waiting for images, add .onerror handlers so a failed image load does not hang the game forever.
-   Also ensure these init functions are called on page load unconditionally (not only after images load)
-   so the game board is always ready when the user clicks PLAY.
+   Do NOT call layout-measuring init functions at page load — they will measure 0px on hidden
+   screens. Only call them after the relevant screen is shown (inside the PLAY button rAF).
 
 4. PLAY BUTTON ALWAYS STARTS FRESH
    The PLAY button must always call newGame() or equivalent fresh-start function.
@@ -905,7 +936,7 @@ def beautify(src_dir: Path) -> bool:
             prompt = PASS4D.format(manifest=json.dumps(manifest, indent=2), aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
             r = call_llm(prompt, html, "pass4d")
             if r:
-                html = r
+                html = fix_css_issues(r)   # strip any padding/bad CSS Pass 4D added
                 prog["pass4"] = True
             else:
                 prog["pass4_failed"] = True
