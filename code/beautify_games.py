@@ -292,14 +292,18 @@ OPTIONAL game sprites — include as many as genuinely improve the visual qualit
 
 AUDIO — up to 5 sound effects. Minimum duration 1.0 seconds each.
 
+For each image, include a "transparent" field:
+  true  — needs transparent background (logos, buttons, sprites, overlays)
+  false — opaque background (background.png, any scene/environment images)
+
 Return ONLY valid JSON — no markdown fences, no explanation:
 {{
   "game_title": "...",
   "images": [
-    {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens"}},
-    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen"}},
-    {{"filename": "title.png", "description": "...", "usage": "stylised game title logo on title screen"}},
-    {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen"}},
+    {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens", "transparent": false}},
+    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": false}},
+    {{"filename": "title.png", "description": "...", "usage": "stylised game title logo on title screen", "transparent": true}},
+    {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true}},
     ...optional game sprites...
   ],
   "audio": [
@@ -487,6 +491,46 @@ def game_context_for_pass0(html: str) -> str:
     struct = html_skeleton(html)
     return f"=== HTML STRUCTURE ===\n{struct}\n\n=== GAME LOGIC (truncated) ===\n{js}"
 
+# ─── Cover image helpers ──────────────────────────────────────────────────────
+COVER_DIRS = [
+    ROOT_DIR / "开头字母A-J游戏封面图",
+    ROOT_DIR / "开头字母K-Z游戏封面图",
+]
+
+def find_cover_image(name: str) -> Path | None:
+    for d in COVER_DIRS:
+        p = d / f"{name}.png"
+        if p.exists():
+            return p
+    return None
+
+def encode_image_b64(path: Path) -> str:
+    return base64.b64encode(path.read_bytes()).decode()
+
+def call_llm_vision(system: str, text: str, image_b64: str, label: str,
+                    max_tokens: int = MAX_TOKENS) -> str | None:
+    try:
+        res = client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=max_tokens,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                    {"type": "text", "text": f"{system}\n\n{text}"}
+                ]
+            }]
+        )
+        if res.choices[0].finish_reason == "length":
+            print(f"    ⚠  {label}: truncated")
+            return None
+        result = _strip_fences(res.choices[0].message.content)
+        result = _fix_screen_backgrounds(result)
+        return result
+    except Exception as e:
+        print(f"    ✗  {label}: {e}")
+        return None
+
 # ─── LLM helper ───────────────────────────────────────────────────────────────
 def _strip_fences(text: str) -> str:
     """Remove markdown code fences (```html ... ``` or ``` ... ```) from LLM output."""
@@ -537,14 +581,27 @@ def fix_css_issues(html: str) -> str:
     # 5. Remove padding overrides on .screen (PASS1 template already sets padding:24px)
     css = re.sub(r'((?:^|\})\s*\.screen\s*\{[^}]*?)padding\s*:[^;]+;', r'\1', css, flags=re.DOTALL | re.MULTILINE)
 
-    # 6. Replace explicit pixel widths > 480px on game containers with max-width to prevent overflow
-    #    e.g. width: 720px → max-width: 100%; width: 100%
+    # 6. Replace explicit pixel widths > 480px on non-canvas containers with max-width.
+    #    canvas rules are excluded — their pixel dimensions define the render surface and
+    #    must not be changed, or the game's coordinate system breaks.
+    _CANVAS_RULE_RE = re.compile(
+        r'(?:^|\})\s*(?:canvas\b|#canvas\b|\.canvas\b)[^{]*\{[^}]*\}', re.DOTALL | re.MULTILINE
+    )
+    # Extract canvas rules, replace in non-canvas portions only
+    canvas_rules = _CANVAS_RULE_RE.findall(css)
+    css_no_canvas = _CANVAS_RULE_RE.sub('\0CANVAS\0', css)
+
     def replace_wide_widths(m):
         val = int(m.group(1))
         if val > 480:
-            return f'max-width: 100%; width: 100%'
+            return 'max-width: 100%; width: 100%'
         return m.group(0)
-    css = re.sub(r'(?<!\-)width\s*:\s*(\d+)px', replace_wide_widths, css)
+    css_no_canvas = re.sub(r'(?<!\-)width\s*:\s*(\d+)px', replace_wide_widths, css_no_canvas)
+
+    # Restore canvas rules untouched
+    for rule in canvas_rules:
+        css_no_canvas = css_no_canvas.replace('\0CANVAS\0', rule, 1)
+    css = css_no_canvas
 
     # 7. Ensure grid/calendar containers don't overflow — add max-width:100% to common grid wrappers
     for grid_sel in [r'\.calendar', r'\.grid', r'\.days-grid', r'\.card-grid', r'\.board-grid']:
@@ -684,6 +741,11 @@ def beautify(src_dir: Path) -> bool:
     if not orig.exists():
         shutil.copy(src_dir / "index.html", orig)
 
+    # Cover image (optional — used as visual reference for Pass 3 + Pass 4A)
+    cover_path = find_cover_image(name)
+    cover_b64  = encode_image_b64(cover_path) if cover_path else None
+    print(f"    ○ cover: {'found ✓' if cover_b64 else 'not found (text-only mode)'}")
+
     # Progress tracking
     prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
     def save_prog(): prog_f.write_text(json.dumps(prog, indent=2))
@@ -769,7 +831,11 @@ def beautify(src_dir: Path) -> bool:
         skeleton = html_skeleton(html)
         content = f"=== HTML STRUCTURE (context only) ===\n{skeleton}\n\n=== CURRENT CSS ===\n{css}"
         prompt3 = PASS3.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
-        r = call_llm(prompt3, content, "pass3", max_tokens=8192)
+        if cover_b64:
+            cover_note = "\nThe cover image above shows this game's official visual style. Use it as your PRIMARY reference for colours, typography mood, and overall aesthetic. The theme JSON is a guide — the cover image overrides it where they differ."
+            r = call_llm_vision(prompt3 + cover_note, content, cover_b64, "pass3", max_tokens=8192)
+        else:
+            r = call_llm(prompt3, content, "pass3", max_tokens=8192)
         if r:
             html = inject_css(html_template, r)
             html = fix_css_issues(html)   # remove known bad CSS patterns
@@ -785,7 +851,12 @@ def beautify(src_dir: Path) -> bool:
     if not prog.get("pass4"):
         print("    → Pass 4a: determine assets")
         prompt4a = PASS4A.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
-        manifest_raw = call_llm(prompt4a, html_skeleton(html), "pass4a", max_tokens=2048)
+        p4a_input = html_skeleton(html)
+        if cover_b64:
+            cover_note = "\nThe cover image above is this game's official artwork. All asset descriptions must match its visual style — colours, illustration style, and mood. game_preview.png should closely match the cover image composition."
+            manifest_raw = call_llm_vision(prompt4a + cover_note, p4a_input, cover_b64, "pass4a", max_tokens=2048)
+        else:
+            manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=2048)
         manifest = None
         if manifest_raw:
             try:
@@ -804,12 +875,14 @@ def beautify(src_dir: Path) -> bool:
             for img in manifest.get("images", []):
                 fname = img["filename"]
                 is_bg = fname == "background.png"
-                print(f"    → Pass 4b: image  {fname}{'' if is_bg else ' (transparent)'}")
-                ok = gen_image(img["description"], img_dir / fname, transparent=not is_bg)
+                # Use manifest's explicit transparent flag; fall back to "everything except background"
+                transparent = img.get("transparent", not is_bg)
+                print(f"    → Pass 4b: image  {fname}{' (transparent)' if transparent else ''}")
+                ok = gen_image(img["description"], img_dir / fname, transparent=transparent)
                 if not ok:
                     # Retry once on failure
                     time.sleep(2)
-                    ok = gen_image(img["description"], img_dir / fname, transparent=not is_bg)
+                    ok = gen_image(img["description"], img_dir / fname, transparent=transparent)
                 if not ok:
                     failed_images.add(fname)
                 time.sleep(1)
