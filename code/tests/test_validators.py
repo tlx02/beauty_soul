@@ -131,3 +131,10 @@ def test_genre_art_direction_loaded_from_config():
     assert "genre_art_direction" in config
     assert "match3" in config["genre_art_direction"]
     assert "puzzle_logic" in config["genre_art_direction"]
+
+
+def test_pass4a_has_three_background_variants():
+    from beautify_games import PASS4A
+    assert "background_home.png" in PASS4A
+    assert "background_game.png" in PASS4A
+    assert "background_gameover.png" in PASS4A

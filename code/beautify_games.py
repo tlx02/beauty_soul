@@ -167,7 +167,7 @@ Add this to the CSS (alongside existing styles — do not remove anything):
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    background-image: url('assets/images/background.png');
+    background-image: url('assets/images/background_home.png');
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
@@ -190,6 +190,9 @@ Add this to the CSS (alongside existing styles — do not remove anything):
   }}
   .screen.active {{ display: flex; }}
   #screen-game > * {{ max-width: 100%; overflow: hidden; }}
+  #screen-home {{ background-image: url('assets/images/background_home.png'); background-size: cover; background-position: center; }}
+  #screen-game {{ background-image: url('assets/images/background_game.png'); background-size: cover; background-position: center; }}
+  #screen-gameover {{ background-image: url('assets/images/background_gameover.png'); background-size: cover; background-position: center; }}
 
 ━━━ RULES ━━━
 - Remove: debug panels, settings, help screens, share buttons, tutorial overlays
@@ -356,9 +359,14 @@ The game has:
   - Gameplay screen (id="screen-game"): shows background + game elements
   - Game Over screen (id="screen-gameover"): shows background + score + PLAY AGAIN
 
-REQUIRED — always include all seven:
-  1. background.png — full-screen atmospheric background for all 3 screens. Subtle, does not
-     compete with gameplay. Soft gradients or bokeh. Painterly illustration or soft digital art.
+REQUIRED — always include all nine:
+  1. background_home.png — full-screen atmospheric background for the TITLE screen.
+     Rich and detailed — establishes the game world. Soft gradients or painterly illustration.
+  2. background_game.png — background for the GAMEPLAY screen.
+     Same palette as background_home.png but darker (30-40% darker) and more desaturated.
+     Minimal detail — must not compete with game elements. Subtle texture or gradient only.
+  3. background_gameover.png — background for the GAME OVER screen.
+     Dramatic darker variant of background_home.png. Slightly ominous or reflective mood.
   2. game_preview.png — gameplay preview on title screen. Key game elements mid-play, 1:1 ratio,
      transparent background, no text or UI chrome.
   3. title.png — styled game title logo. Bold themed lettering, transparent background.
@@ -414,7 +422,9 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 {{
   "game_title": "...",
   "images": [
-    {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens", "transparent": false, "w": {max_width}, "h": {screen_h}}},
+    {{"filename": "background_home.png", "description": "...", "usage": "#screen-home background, rich and atmospheric", "transparent": false, "w": {max_width}, "h": {screen_h}}},
+    {{"filename": "background_game.png", "description": "...", "usage": "#screen-game background, darker desaturated variant", "transparent": false, "w": {max_width}, "h": {screen_h}}},
+    {{"filename": "background_gameover.png", "description": "...", "usage": "#screen-gameover background, dramatic darker variant", "transparent": false, "w": {max_width}, "h": {screen_h}}},
     {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": true, "w": 300, "h": 300}},
     {{"filename": "title.png", "description": "...", "usage": "game title logo on title screen", "transparent": true, "w": 400, "h": 160}},
     {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true, "w": 280, "h": 100}},
@@ -731,9 +741,9 @@ def _strip_fences(text: str) -> str:
 
 # Regex to find a CSS rule block for a given selector and remove background/background-color from it
 _SCREEN_BG_RE = re.compile(
-    r'(#screen-(?:home|game|gameover)\s*\{[^}]*?)'   # selector + props before
-    r'(?:background(?:-color)?\s*:[^;]+;[ \t]*\n?)'  # background: ... or background-color: ...
-    r'([^}]*?\})',                                     # remaining props + closing brace
+    r'(#screen-(?:home|game|gameover)\s*\{[^}]*?)'
+    r'(?:background(?:-color)?\s*:\s*(?!url\([\'"]?assets/images/background_(?:home|game|gameover))[^;]+;[ \t]*\n?)'
+    r'([^}]*?\})',
     re.DOTALL
 )
 
