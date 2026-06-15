@@ -29,6 +29,7 @@ from PIL import Image as PILImage
 from openai import OpenAI
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
+# (Trinity Protocol import deferred until after secrets are loaded — see below)
 CODE_DIR   = Path(__file__).parent
 ROOT_DIR   = CODE_DIR.parent
 SELECTED   = ROOT_DIR / "selected_300_new"
@@ -43,6 +44,16 @@ ELEVENLABS_KEY = secrets["elevenlabs"]
 LLM_MODEL      = config.get("llm_model",   "anthropic/claude-sonnet-4-5")
 IMAGE_MODEL    = config.get("image_model", "openai/dall-e-3")
 MAX_TOKENS     = config.get("max_tokens",  32768)
+
+# ─── Trinity Protocol SDK ─────────────────────────────────────────────────────
+import os as _os
+_os.environ.setdefault("OPENROUTER_API_KEY", secrets.get("openrouter", ""))
+try:
+    from trinity_protocol import solve
+    _TP_AVAILABLE = True
+except ImportError:
+    _TP_AVAILABLE = False
+    print("⚠  trinity_protocol not installed — analytical passes will use call_llm fallback")
 
 # ─── OpenRouter client (handles both LLM and image calls) ─────────────────────
 client = OpenAI(
@@ -98,9 +109,29 @@ Keep ALL existing game logic, canvas, elements, and event listeners exactly as-i
 IMPORTANT: If the game uses <canvas>, add style="background:transparent" to the canvas element
 so the shared background image shows through behind it.
 
+The gameplay screen MUST always have a home button (id="btn-home-game") and a pause button
+(id="btn-pause-game"). Analyze the game's existing layout and place them naturally:
+  - If the game already has a HUD bar, score row, or header inside #screen-game → add the buttons
+    INTO that existing container (e.g. at the edges of the bar). Do NOT add a new wrapper.
+  - Only if there is NO existing bar/header → add a minimal <div id="game-topbar"> as the
+    first child of #screen-game to hold them.
+  Keep whatever wrapper makes sense for the layout. The IDs must be exactly btn-home-game and
+  btn-pause-game. Use placeholder content (&#8962; for home, &#9646;&#9646; for pause) — images
+  will be wired in a later pass.
+
+Add a pause overlay INSIDE .app-container as a sibling of the screen divs:
+  <div id="pause-overlay">
+    <div id="pause-card">
+      <div id="pause-title">Paused</div>
+      <button id="btn-resume-game">Resume</button>
+      <button id="btn-restart-pause">Restart</button>
+      <button id="btn-home-pause">Home</button>
+    </div>
+  </div>
+
 ━━━ SCREEN 3 — Game Over Screen ━━━
 Give its outer div: id="screen-gameover" class="screen"
-Must contain: final score/result display + a PLAY AGAIN button that restarts the game.
+Must contain: final score/result display + a PLAY AGAIN button + a HOME button that returns to screen-home.
 If one exists, reshape it. If not, create a minimal one.
 
 ━━━ SHARED LAYOUT ━━━
@@ -147,10 +178,19 @@ Add this to the CSS (alongside existing styles — do not remove anything):
   #screen-game > * {{ max-width: 100%; overflow: hidden; }}
 
 ━━━ RULES ━━━
-- Remove: debug panels, settings, help screens, share buttons, extra navigation, tutorial overlays
+- Remove: debug panels, settings, help screens, share buttons, tutorial overlays
+- LEVEL-BASED GAMES — CRITICAL: if the game has a level system (a LEVELS/levelConfigs array,
+  a function that takes a level index to start a specific puzzle, difficulty tables), you MUST:
+  1. Preserve ALL level data arrays and configs in the JS — never delete them
+  2. Preserve the level-start function intact — never simplify or remove it
+  3. Wire the #btn-start PLAY button to call that function with a RANDOM level index so the
+     player gets a different puzzle each time. Find the total number of levels from the array
+     length or config, then pick Math.floor(Math.random() * totalLevels).
+  Level select UI screens can be removed — the random start replaces them.
+  Do NOT remove the underlying level data or generation functions.
 - Do NOT change game logic, scoring, physics, or timers
-- Preserve all existing IDs and class names that JS references — just add the new wrapper structure around them
-- Preserve level-progression and game-over advancement buttons (e.g. "Next Level", "Continue", "Next Stage") — move them into screen-gameover even if they came from result/settings screens being removed
+- Preserve all existing IDs and class names that JS references
+- Preserve level-progression buttons (e.g. "Next Level", "Continue") — move into screen-gameover
 
 Return ONLY the complete modified HTML. No explanation."""
 
@@ -175,6 +215,34 @@ Fix ONLY issues that would prevent the game from running:
     brief grace period counter: skip the fail check for the first 3-5 frames after game start
   - Score or timer not resetting on restart
   - JS references to IDs that no longer exist in the DOM (e.g. removed settings/help panels)
+
+PUZZLE SOLVABILITY — if the game generates puzzles by randomly distributing or shuffling pieces
+(tiles, balls, blocks, cards) into a starting state, check whether generation guarantees
+solvability. A plain Fisher-Yates shuffle does NOT guarantee a solvable state.
+  If generation is shuffle-based with no solvability check: replace it with REVERSE SIMULATION:
+    1. Construct the fully solved/winning state of the puzzle (whatever the goal state is)
+    2. Apply N random VALID moves in reverse — moves that are legal in the forward game —
+       to scramble from solved into a starting state
+    3. The result is guaranteed solvable because it was reached backward from the goal
+  This pattern works for any constraint-based puzzle: sliding tiles, sorted containers,
+  connected pipes, filled grids, etc.
+  Do NOT apply this if: the game already uses constraint-based or reverse-simulation generation,
+  or if levels are pre-authored fixed configs (hardcoded arrays of piece positions).
+  Only replace when generation is clearly a random shuffle with no solvability guarantee.
+
+HOME + PAUSE CONTROLS — wire up the injected buttons:
+  Add `let paused = false;` near the top of the script (with other state variables).
+  - #btn-home-game and #btn-pause-game: set paused = true; add class "active" to #pause-overlay
+  - #btn-resume-game: set paused = false; remove class "active" from #pause-overlay; resume loop:
+      canvas/rAF games → requestAnimationFrame(gameLoop)
+      setInterval games → restart the interval
+      input-driven games → no loop to resume (paused flag is enough)
+  - #btn-restart-pause: set paused = false; remove "active" from #pause-overlay; call restart/newGame
+  - #btn-home-pause: set paused = false; remove "active"; stop game loop; showScreen('home')
+  CRITICAL — guard ALL input handlers with `if (paused) return;` at the top:
+    keyboard handlers, pointerdown/up/move handlers, touch handlers, click handlers on game elements.
+    This prevents moves/clicks registering while the pause overlay is visible.
+  Add null guards on all getElementById calls.
 
 Leave anything ambiguous untouched. Do NOT change mechanics, difficulty, or intentional behaviour.
 Return ONLY the complete modified HTML. No explanation."""
@@ -226,6 +294,22 @@ must feel intentional and part of this specific theme — not generic.
 
   #screen-game (Gameplay):
     - Do NOT override background or add decorative chrome that competes with gameplay
+    - Use justify-content: space-evenly so content is distributed across the full screen height —
+      never justify-content: flex-start which clusters everything at the top
+    - #btn-home-game and #btn-pause-game: style as small unobtrusive icon buttons wherever they
+      were placed. Image assets will replace the placeholder text in a later pass — style them
+      as transparent image containers (background:transparent, border:none, padding:0, cursor:pointer).
+      Do NOT create a separate #game-topbar if the game already has a HUD bar — integrate into it.
+    - #pause-overlay: fullscreen overlay covering the app container (position:absolute, inset:0, z-index:9999).
+      Hidden by default (display:none), shown with class "active" (display:flex).
+      Semi-transparent dark backdrop. #pause-card centred inside it.
+      Style #pause-card to match the game theme — the background image will be wired later,
+      so set background:transparent. Buttons inside should be clearly readable.
+    - In-game overlays (win popup, gameover popup) that appear OVER the play area must use
+      position:absolute; inset:0 — never position:fixed (which escapes the app container)
+    - When applying a background-image to a HUD/score panel, make direct child elements
+      transparent (no background-color) so the panel image shows through
+    - Use filter:drop-shadow() instead of box-shadow on any element with a panel background-image
     - #screen-game must keep align-items: center — all child elements must be horizontally centred
     - Canvas: background transparent; centred with display:block margin:0 auto
     - All game containers (boards, grids, canvas wrappers, buttons) must be centred — use margin:0 auto or align-self:center; never leave them left-aligned
@@ -236,7 +320,8 @@ must feel intentional and part of this specific theme — not generic.
 
   #screen-gameover (Game Over):
     - Centred, breathable — final score large and prominent
-    - PLAY AGAIN button uses .btn-primary styling (themed background, padding, border-radius) — same visual weight as #btn-start but as a full styled button, not a transparent image container
+    - Must have both a PLAY AGAIN button and a HOME button (returns to title screen)
+    - PLAY AGAIN / HOME use .btn-primary styling — themed background, padding, border-radius
 
 ━━━ VISUAL QUALITY ━━━
 - Import a Google Font that matches font_style from the theme (one font, 2 weights max)
@@ -257,26 +342,24 @@ The game has:
   - Gameplay screen (id="screen-game"): shows background + game elements
   - Game Over screen (id="screen-gameover"): shows background + score + PLAY AGAIN
 
-REQUIRED — always include all four:
-  1. background.png — a SIMPLE, ATMOSPHERIC background used on all 3 screens.
-     CRITICAL: it must be a subtle scene that DOES NOT compete with gameplay elements.
-     Use soft gradients, gentle depth-of-field bokeh, or a minimalist environment scene.
-     No busy patterns, no detailed textures, no bright focal points in the centre.
-     The game's UI and sprites must read clearly on top of it.
-     Style: painterly illustration or soft digital art, consistent with the approved theme.
-  2. game_preview.png — a gameplay preview shown on the title screen.
-     Show key game elements mid-play (e.g. gems mid-combo, ball mid-flight, snake curving).
-     Style: clean illustration, transparent background, 1:1 ratio. No text or UI chrome.
-     Must match the approved theme's colour palette.
-  3. title.png — a stylised logo/title image for the game name, shown on the title screen.
-     Style: bold themed lettering or illustrated logo, transparent background.
-     Must feel like a polished game title, consistent with the approved theme.
-  4. btn_play.png — a themed PLAY button image for the title screen.
-     Style: an attractive pill or badge shape with "PLAY" text, consistent with the approved theme.
-     Transparent background, clean edges.
+REQUIRED — always include all seven:
+  1. background.png — full-screen atmospheric background for all 3 screens. Subtle, does not
+     compete with gameplay. Soft gradients or bokeh. Painterly illustration or soft digital art.
+  2. game_preview.png — gameplay preview on title screen. Key game elements mid-play, 1:1 ratio,
+     transparent background, no text or UI chrome.
+  3. title.png — styled game title logo. Bold themed lettering, transparent background.
+  4. btn_play.png — PLAY button for the title screen. Pill/badge shape with "PLAY" text,
+     transparent background.
+  5. btn_home.png — home icon button for the in-game topbar (#btn-home-game). Small, themed,
+     icon only (no text), transparent background.
+  6. btn_pause.png — pause icon button for the in-game topbar (#btn-pause-game). Same style as
+     btn_home.png, two vertical bars, transparent background.
+  7. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
+     Styled to match the game theme. NO text, NO buttons baked in. Transparent background.
 
-OPTIONAL UI CHROME — panels, HUD frames, popups. These make the game feel real instead of CSS-only.
-  Generate decorative background images for UI containers that currently look plain.
+OPTIONAL UI CHROME — up to 4 additional panel/frame images. These make the game feel real.
+  Generate decorative background images for the most impactful UI containers — prioritise:
+  score/HUD panel, game-over card, win card, then any other prominent frame.
   Look for these in the HTML structure and generate one image per container:
   - Score/HUD panel: the box showing score, timer, lives, level — a styled frame/badge background
   - Game-over popup panel: the card/modal that shows "Game Over" + final score + replay button
@@ -288,7 +371,10 @@ OPTIONAL UI CHROME — panels, HUD frames, popups. These make the game feel real
     baked into the image. Live data (score values, button labels) is rendered by HTML on top.
   - transparent: true always (these overlay on the background)
   - "usage" field must name the HTML element ID or class it wraps (e.g. "#score-panel", ".gameover-card")
-  - Keep sizing proportional: a HUD bar might be ~480×80px; a popup card ~360×480px
+  - NEVER generate an image for the game board, grid, play area, tile container, canvas wrapper,
+    or any element whose children are JS-positioned game objects. These elements are #grid-wrap,
+    #board, #game-area, #tiles, #cells, canvas, and any equivalent. An image on these elements
+    conflicts with JS tile/sprite positioning and breaks the game. No exceptions.
 
 OPTIONAL game sprites — be selective.
   Only replace elements that are visually generic (plain shapes, solid colours) and would benefit
@@ -304,21 +390,24 @@ OPTIONAL game sprites — be selective.
 
 AUDIO — up to 5 sound effects. Minimum duration 1.0 seconds each.
 
-For each image, include a "transparent" field:
-  true  — needs transparent background (logos, buttons, UI panels, sprites)
-  false — opaque background (background.png only)
+For each image include:
+  - "transparent": true for logos, buttons, UI panels, sprites; false for background.png only
+  - "w" and "h": the pixel dimensions that make sense for this asset's role. Choose what looks
+    best — background is the full screen, icon buttons are small squares, popup cards are
+    portrait rectangles, HUD panels match the width of the container they frame.
 
 Return ONLY valid JSON — no markdown fences, no explanation:
 {{
   "game_title": "...",
   "images": [
-    {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens", "transparent": false}},
-    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": false}},
-    {{"filename": "title.png", "description": "...", "usage": "stylised game title logo on title screen", "transparent": true}},
-    {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true}},
-    {{"filename": "hud_panel.png", "description": "decorative frame for score display — no text or numbers", "usage": "#score-panel or .hud-bar", "transparent": true}},
-    {{"filename": "gameover_panel.png", "description": "styled card frame for game-over popup — no text", "usage": ".gameover-card or #gameover-popup", "transparent": true}},
-    ...optional sprites...
+    {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens", "transparent": false, "w": {max_width}, "h": {screen_h}}},
+    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": false, "w": 300, "h": 300}},
+    {{"filename": "title.png", "description": "...", "usage": "game title logo on title screen", "transparent": true, "w": 400, "h": 160}},
+    {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true, "w": 280, "h": 100}},
+    {{"filename": "btn_home.png", "description": "...", "usage": "#btn-home-game", "transparent": true, "w": 80, "h": 80}},
+    {{"filename": "btn_pause.png", "description": "...", "usage": "#btn-pause-game", "transparent": true, "w": 80, "h": 80}},
+    {{"filename": "pause_card.png", "description": "...", "usage": "#pause-card", "transparent": true, "w": 360, "h": 440}},
+    ...optional UI chrome and sprites...
   ],
   "audio": [
     {{"filename": "sfx_name.mp3", "description": "...", "duration_seconds": 1.0}}
@@ -360,15 +449,52 @@ RULES:
     - For background music: set snd.loop = true; snd.play() when gameplay starts
 
 UI CHROME PANELS (HUD frames, popups, score cards):
-  For each panel/HUD image in the manifest, wire it as a CSS background-image on the target element
-  named in the "usage" field. Rules:
-  - background-image: url('assets/images/panel.png')
-  - background-size: 100% 100%  (fills the container exactly — never "auto" or "cover")
-  - background-repeat: no-repeat
-  - position: relative on the container so children stack on top
-  - Keep ALL child elements (text, buttons, scores) fully visible — do NOT hide or remove them
-  - Remove any conflicting CSS background-color from that element (the image replaces it)
-  - If the container has no explicit size, add min-height to ensure the panel image is visible
+  For each panel/HUD image in the manifest, wire it as CSS on the target element in "usage".
+
+  HUD / score bar panels (small bars at top of game screen):
+  - background-image + background-size: 100% 100% + background-repeat: no-repeat
+  - position: relative; box-sizing: border-box
+  - padding: 12% 15%  — generous padding keeps text well inside the visual frame border
+  - Remove conflicting background-color and border
+  - Add min-height so the panel is always visible even if children are small
+
+  Popup panels (game-over card, win card, pause menu — anything that appears over gameplay):
+  - Do NOT use position:absolute with inset:0 — that stretches the panel across the entire
+    parent container, distorting the image. Instead, create a centred popup:
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 85%; max-width: 420px;
+      z-index: 100;
+  - background-image + background-size: 100% 100% + background-repeat: no-repeat
+  - padding: 10% 12% — keeps all child content (title, score, buttons) inside the frame
+  - box-sizing: border-box; border-radius matching the panel image corners
+  - display: flex; flex-direction: column; align-items: center; gap: 0.8rem
+  - Remove conflicting background-color and border
+  - If the popup was previously an overlay with inset:0, move it OUT of the game container
+    and wire it as a fixed-position element instead
+
+  Result / stats cards (on game-over screen):
+  - background-image + background-size: 100% 100% + background-repeat: no-repeat
+  - padding: 8% 10% — keeps rows inside the visual frame
+  - width: 85%; max-width: 400px; box-sizing: border-box
+  - Remove conflicting background-color and border
+
+  ALL panel types:
+  - Keep ALL child elements (text, scores, buttons) fully visible on top — never hide them
+  - Ensure enough padding that no text touches the panel edges
+  - CRITICAL: when applying a background-image panel to a container, remove background-color
+    and background from ALL direct children that would cover the panel image — children must
+    be transparent so the panel shows through
+  - Use filter:drop-shadow(...) instead of box-shadow on any element with a panel background-image
+    so the shadow follows the image shape rather than the element's bounding rectangle
+  - In-game overlays (win message, gameover popup inside the game play area) must use
+    position:absolute; inset:0 — NOT position:fixed, which escapes the app container on
+    wide-viewport layouts and breaks multi-game-per-page embedding
+
+TOPBAR + PAUSE CARD:
+  - btn_home.png → put <img src="assets/images/btn_home.png"> inside #btn-home-game, remove text
+  - btn_pause.png → put <img src="assets/images/btn_pause.png"> inside #btn-pause-game, remove text
+  - pause_card.png → apply as background-image on #pause-card, background-size: 100% 100%,
+    keep all child elements (title, buttons) visible on top, remove conflicting background-color
 
 ALIGNMENT:
   - All wired sprites must appear visually centred on their game object — never offset or clipped
@@ -399,6 +525,10 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
       screen-game), change the handler to skip all intermediate screens and call the game's
       start function + show screen-game directly. Apply sensible defaults for any parameters
       the intermediate screen was collecting (e.g., default bet=10, default difficulty='normal').
+      LEVEL-BASED GAMES (has_level_select_system=true): verify the PLAY button starts a random
+      level index, not always index 0. If it hardcodes 0, fix it to use
+      Math.floor(Math.random() * totalLevels) where totalLevels comes from the level array.
+      Never modify the level generation algorithm itself.
    d) PLAY button — ID convention: check how the game's showScreen/goto/nav helper function
       constructs element IDs. If it prepends 'screen-' to its argument (e.g., function goto(name)
       { getElementById('screen-'+name) }), then ALL calls to it must pass the bare name
@@ -419,6 +549,9 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    equivalent) INSIDE the requestAnimationFrame, right before newGame()/startGame():
      showScreen('game');
      requestAnimationFrame(() => { buildGrid(); newGame(); });
+   Also apply this to ALL restart paths — any button (Restart, Play Again, Try Again, Next Level)
+   that reinitialises the game while screen-game is already visible must also call buildGrid()
+   (or equivalent layout-measuring init) before newGame(). Use requestAnimationFrame if needed.
 
 3. IMAGE LOAD PROMISES BLOCKING INIT
    If buildBoardDOM(), renderTray(), or equivalent init functions are gated inside a Promise.all
@@ -452,6 +585,11 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    even if the game-over screen has not been triggered during testing — check the static DOM.
    Also ensure: (a) a visible final score or result display exists, (b) if the game had level
    progression buttons, preserve them.
+
+8. POINTER EVENT CONSISTENCY
+   Replace all inline `onclick="..."` on game buttons with `onpointerdown="..."` for consistent
+   low-latency response on both mobile and desktop. The only exception is `<a>` links.
+   This applies to all buttons: Play Again, Restart, Home, Next Level, etc.
 
 Return ONLY the complete modified HTML. No explanation."""
 
@@ -491,6 +629,7 @@ def analyze_game(html: str) -> dict:
     uses_dom_meas  = bool(re.search(r'offsetWidth|offsetHeight|getBoundingClientRect|clientWidth|clientHeight', html))
     has_touch      = bool(re.search(r'touchstart|touchend|touchmove|pointerdown|pointermove|pointerup', html))
     has_levels     = bool(re.search(r'next.?level|nextLevel|nextStage|levelUp|level\s*\+\+|advance', html, re.IGNORECASE))
+    has_level_select = bool(re.search(r'startLevel|loadLevel|selectLevel|levelIndex|levelIdx|LEVELS\s*=|levels\s*=\s*\[', html, re.IGNORECASE))
     has_solid_fill = bool(re.search(r'ctx\.fillRect\s*\(\s*0\s*,\s*0\s*,', html))
     has_audio_ctx  = bool(re.search(r'AudioContext|webkitAudioContext', html))
     has_audio_el   = bool(re.search(r'new Audio\s*\(', html))
@@ -509,6 +648,7 @@ def analyze_game(html: str) -> dict:
         "uses_dom_meas":     uses_dom_meas,
         "has_touch":         has_touch,
         "has_levels":        has_levels,
+        "has_level_select":  has_level_select,
         "has_solid_fill":    has_solid_fill,
         "has_audio_ctx":     has_audio_ctx,
         "has_audio_el":      has_audio_el,
@@ -652,10 +792,48 @@ def fix_css_issues(html: str) -> str:
             css, flags=re.DOTALL
         )
 
-    # Always append structural guardrail last (wins by cascade order over same-specificity PASS3 rules)
-    css += "\n/* ── structural guardrail ── */\n"
-    css += "#screen-game { overflow: hidden !important; }\n"
-    css += "#screen-game > * { max-width: 100% !important; overflow: hidden !important; }\n"
+    # 8. Strip solid background-color from elements that also have a background-image panel.
+    #    A solid child background covers the panel image, making it invisible.
+    #    Find CSS rules that have both background-image and background-color, remove the color.
+    css = re.sub(
+        r'((?:[^{}]+\{[^}]*?)background-image\s*:[^;]+;[^}]*?)background(?:-color)?\s*:\s*(?!transparent)[^;]+;',
+        r'\1background: transparent;',
+        css, flags=re.DOTALL
+    )
+
+    # 9. Remove background-image from game board containers — breaks JS tile measurement/positioning
+    for board_sel in [r'#grid-wrap', r'#board\b', r'#game-area\b', r'#play-area\b',
+                      r'#game-board', r'#gameBoard', r'#world\b', r'#canvas-wrap',
+                      r'#tiles\b', r'#cells\b']:
+        css = re.sub(
+            rf'({board_sel}\s*\{{[^}}]*?)background-image\s*:[^;]+;',
+            r'\1', css, flags=re.DOTALL
+        )
+
+    # 9. Fix #pause-overlay: must be position:absolute (not fixed) so it stays within .app-container
+    css = re.sub(
+        r'(#pause-overlay\s*\{[^}]*?)position\s*:\s*fixed\s*;',
+        r'\1position: absolute;',
+        css, flags=re.DOTALL
+    )
+
+    # 10. Remove any duplicate #screen-game > * rules Pass 3 may have generated
+    #     (keeps only the last occurrence; our guardrail below will be the authoritative one)
+    seen_game_rule = False
+    clean_blocks = []
+    for block in re.split(r'(?=\n?#screen-game\s*>\s*\*)', css):
+        if re.match(r'\s*#screen-game\s*>\s*\*', block):
+            if seen_game_rule:
+                continue  # drop duplicate
+            seen_game_rule = True
+        clean_blocks.append(block)
+    css = ''.join(clean_blocks)
+
+    # Always append structural guardrail last — only once (fix_css_issues runs after Pass3 and Pass4D)
+    if "structural guardrail" not in css:
+        css += "\n/* ── structural guardrail ── */\n"
+        css += "#screen-game { position: relative; overflow: hidden !important; }\n"
+        css += "#screen-game > * { max-width: 100% !important; overflow: hidden !important; }\n"
     # Also strip any overflow:visible declarations from within screen-game scope
     css = re.sub(
         r'(#screen-game[^{]*\{[^}]*?)overflow\s*:\s*visible\s*;',
@@ -684,11 +862,79 @@ def call_llm(system: str, html: str, label: str, max_tokens: int = MAX_TOKENS) -
         print(f"    ✗  {label}: {e}")
         return None
 
+
+def _extract_json_from_solve(text: str) -> dict | None:
+    """Extract the first valid JSON object from a solve() response.
+    solve() appends AW critic text after the answer — strip it before parsing."""
+    import json as _json
+    candidates = [
+        text.strip(),
+        _strip_fences(text),
+    ]
+    for c in candidates:
+        try:
+            return _json.loads(c)
+        except Exception:
+            pass
+        for sep in ["\n---", "\n[AW", "\n\n"]:
+            idx = c.find(sep)
+            if idx != -1:
+                try:
+                    return _json.loads(c[:idx].strip())
+                except Exception:
+                    pass
+        import re as _re
+        m = _re.search(r'\{.*\}', c, _re.DOTALL)
+        if m:
+            try:
+                return _json.loads(m.group())
+            except Exception:
+                pass
+    return None
+
+
+def tp_analyze(problem: str, fallback_system: str, fallback_html: str,
+               label: str, max_tokens: int = 1024, file_paths: list = None) -> str | None:
+    """Run Trinity Protocol solve() for analytical passes; fall back to call_llm on failure.
+
+    Returns raw text output (same contract as call_llm).
+    Use _extract_json_from_solve() on the result when JSON is expected.
+    """
+    if _TP_AVAILABLE:
+        try:
+            result = solve(
+                problem,
+                backend="openrouter",
+                max_tokens=max_tokens,
+                file_paths=file_paths,
+                verify_consistency=bool(file_paths),
+                adaptive=True,
+            )
+            if result and len(result.strip()) > 10 and "{" in result:
+                return result
+            print(f"    ⚠  tp_analyze {label}: empty or non-JSON response, falling back")
+        except Exception as e:
+            print(f"    ⚠  tp_analyze {label}: {e}, falling back to call_llm")
+    return call_llm(fallback_system, fallback_html, label, max_tokens=max_tokens)
+
+
 # ─── Image generation ─────────────────────────────────────────────────────────
 def _strip_background(img_bytes: bytes) -> bytes:
-    """Crop transparent image to its content bounding box."""
+    """Remove solid/white background if present, then crop to content bounding box."""
     try:
         img = PILImage.open(BytesIO(img_bytes)).convert("RGBA")
+        pixels = list(img.getdata())
+        # Check if image has any real transparency (alpha < 250)
+        has_transparency = any(p[3] < 250 for p in pixels)
+        if not has_transparency:
+            # All pixels are opaque — likely white background; use rembg to remove it
+            try:
+                from rembg import remove as rembg_remove
+                img_bytes = rembg_remove(img_bytes)
+                img = PILImage.open(BytesIO(img_bytes)).convert("RGBA")
+            except Exception as e:
+                print(f"    ⚠  rembg failed ({e}), keeping original")
+        # Crop to bounding box to remove residual transparent border
         bbox = img.getbbox()
         if bbox:
             img = img.crop(bbox)
@@ -696,7 +942,7 @@ def _strip_background(img_bytes: bytes) -> bytes:
         img.save(buf, format="PNG")
         return buf.getvalue()
     except Exception as e:
-        print(f"    ⚠  crop failed ({e}), keeping original")
+        print(f"    ⚠  background removal failed ({e}), keeping original")
         return img_bytes
 
 
@@ -781,6 +1027,15 @@ def beautify(src_dir: Path) -> bool:
     prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
     def save_prog(): prog_f.write_text(json.dumps(prog, indent=2))
 
+    # Migrate old pass4 flag → new split flags so existing games aren't re-processed
+    if prog.get("pass4") and not prog.get("pass4_assets"):
+        prog["pass4_assets"] = True
+        prog["pass4_wire"] = True
+        mf = out_dir / "assets" / "manifest.json"
+        if mf.exists() and not prog.get("manifest"):
+            prog["manifest"] = json.loads(mf.read_text())
+        save_prog()
+
     # Load from last completed pass
     def latest_html() -> str:
         for fname in ("index_pass3.html", "index_pass2.html", "index_pass1.html", "index_original.html"):
@@ -830,12 +1085,17 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 1: strip UI ──────────────────────────────────────────────────────
     if not prog.get("pass1"):
         print("    → Pass 1: strip non-core UI")
-        r = call_llm(PASS1.format(aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width), html, "pass1")
+        pass1_prompt = PASS1.format(aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
+        r = call_llm(pass1_prompt, html, "pass1", max_tokens=65536)
+        if not r:
+            time.sleep(3)
+            r = call_llm(pass1_prompt, html, "pass1 (retry)", max_tokens=65536)
         if r:
             html = r
             (out_dir / "index_pass1.html").write_text(html, encoding="utf-8")
             prog["pass1"] = True
         else:
+            print("    ⚠  pass1 failed — continuing from original HTML (game may lack 3-screen structure)")
             prog["pass1_failed"] = True
         save_prog()
     elif (out_dir / "index_pass1.html").exists():
@@ -878,21 +1138,21 @@ def beautify(src_dir: Path) -> bool:
     elif (out_dir / "index_pass3.html").exists():
         html = (out_dir / "index_pass3.html").read_text(encoding="utf-8")
 
-    # ── Pass 4: assets ────────────────────────────────────────────────────────
-    if not prog.get("pass4"):
+    # ── Pass 4a-c: determine + generate assets ───────────────────────────────
+    manifest = prog.get("manifest")
+    if not prog.get("pass4_assets"):
         print("    → Pass 4a: determine assets")
-        prompt4a = PASS4A.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
+        prompt4a = PASS4A.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width, screen_h=screen_height)
         p4a_input = html_skeleton(html)
         if cover_b64:
             cover_note = "\nThe cover image above is this game's official artwork. All asset descriptions must match its visual style — colours, illustration style, and mood. game_preview.png should closely match the cover image composition."
-            manifest_raw = call_llm_vision(prompt4a + cover_note, p4a_input, cover_b64, "pass4a", max_tokens=2048)
+            manifest_raw = call_llm_vision(prompt4a + cover_note, p4a_input, cover_b64, "pass4a", max_tokens=4096)
         else:
-            manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=2048)
+            manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=4096)
         manifest = None
         if manifest_raw:
             try:
-                raw = _strip_fences(manifest_raw)
-                manifest = json.loads(raw)
+                manifest = json.loads(_strip_fences(manifest_raw))
             except Exception as e:
                 print(f"    ⚠  pass4a: could not parse manifest — {e}")
 
@@ -906,43 +1166,71 @@ def beautify(src_dir: Path) -> bool:
             for img in manifest.get("images", []):
                 fname = img["filename"]
                 is_bg = fname == "background.png"
-                # Use manifest's explicit transparent flag; fall back to "everything except background"
                 transparent = img.get("transparent", not is_bg)
+                out_path = img_dir / fname
+                if out_path.exists():
+                    print(f"    → Pass 4b: image  {fname} (cached)")
+                    try:
+                        actual = PILImage.open(out_path)
+                        img["w"], img["h"] = actual.size
+                    except Exception:
+                        pass
+                    continue
                 print(f"    → Pass 4b: image  {fname}{' (transparent)' if transparent else ''}")
-                ok = gen_image(img["description"], img_dir / fname, transparent=transparent)
+                desc = img["description"]
+                if transparent:
+                    desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
+                ok = gen_image(desc, out_path, transparent=transparent)
                 if not ok:
-                    # Retry once on failure
                     time.sleep(2)
-                    ok = gen_image(img["description"], img_dir / fname, transparent=transparent)
+                    ok = gen_image(desc, out_path, transparent=transparent)
                 if not ok:
                     failed_images.add(fname)
+                elif out_path.exists():
+                    # Overwrite w/h with actual generated dimensions
+                    try:
+                        actual = PILImage.open(out_path)
+                        img["w"], img["h"] = actual.size
+                    except Exception:
+                        pass
                 time.sleep(1)
 
-            # Remove failed images from manifest before wiring
             if failed_images:
                 manifest["images"] = [i for i in manifest["images"] if i["filename"] not in failed_images]
                 print(f"    ⚠  skipping {len(failed_images)} failed image(s) in wiring: {failed_images}")
 
             for aud in manifest.get("audio", []):
+                out_path = aud_dir / aud["filename"]
+                if out_path.exists():
+                    print(f"    → Pass 4c: audio  {aud['filename']} (cached)")
+                    continue
                 print(f"    → Pass 4c: audio  {aud['filename']}")
-                gen_audio(aud["description"], aud.get("duration_seconds", 1.0), aud_dir / aud["filename"])
+                gen_audio(aud["description"], aud.get("duration_seconds", 1.0), out_path)
                 time.sleep(0.5)
 
             (out_dir / "assets" / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False)
             )
-
-            print("    → Pass 4d: wire assets into HTML")
-            prompt = PASS4D.format(manifest=json.dumps(manifest, indent=2), aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
-            r = call_llm(prompt, html, "pass4d")
-            if r:
-                html = fix_css_issues(r)   # strip any padding/bad CSS Pass 4D added
-                prog["pass4"] = True
-            else:
-                prog["pass4_failed"] = True
+            prog["manifest"] = manifest
+            prog["pass4_assets"] = True
         else:
-            prog["pass4_skipped"] = True
+            prog["pass4_assets_skipped"] = True
 
+        save_prog()
+
+    # Load manifest from progress if assets were already generated
+    manifest = manifest or prog.get("manifest")
+
+    # ── Pass 4d: wire assets into HTML ────────────────────────────────────────
+    if not prog.get("pass4_wire") and manifest:
+        print("    → Pass 4d: wire assets into HTML")
+        prompt = PASS4D.format(manifest=json.dumps(manifest, indent=2), aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
+        r = call_llm(prompt, html, "pass4d")
+        if r:
+            html = fix_css_issues(r)
+            prog["pass4_wire"] = True
+        else:
+            prog["pass4_wire_failed"] = True
         save_prog()
 
     # ── Pass 5: playability QA ────────────────────────────────────────────────
@@ -956,6 +1244,7 @@ def beautify(src_dir: Path) -> bool:
             f"has_audio_context={game_meta.get('has_audio_ctx')}, "
             f"has_audio_elements={game_meta.get('has_audio_el')}, "
             f"has_level_progression={game_meta.get('has_levels')}, "
+            f"has_level_select_system={game_meta.get('has_level_select')}, "
             f"has_drag_interaction={game_meta.get('has_drag')}\n\n"
         )
         pass5_input = meta_note + html
