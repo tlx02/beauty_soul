@@ -401,7 +401,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
   "game_title": "...",
   "images": [
     {{"filename": "background.png", "description": "...", "usage": "full-screen background on all 3 screens", "transparent": false, "w": {max_width}, "h": {screen_h}}},
-    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": false, "w": 300, "h": 300}},
+    {{"filename": "game_preview.png", "description": "...", "usage": "gameplay preview centred on title screen", "transparent": true, "w": 300, "h": 300}},
     {{"filename": "title.png", "description": "...", "usage": "game title logo on title screen", "transparent": true, "w": 400, "h": 160}},
     {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true, "w": 280, "h": 100}},
     {{"filename": "btn_home.png", "description": "...", "usage": "#btn-home-game", "transparent": true, "w": 80, "h": 80}},
@@ -600,10 +600,14 @@ def extract_css(html: str) -> tuple[str, str]:
     """Return (combined CSS text, html with style blocks replaced by __STYLES__ marker)."""
     blocks = STYLE_RE.findall(html)
     css = "\n\n".join(content for _, content, _ in blocks)
-    stripped = STYLE_RE.sub("", html, count=1)   # remove first block; marker inserted below
-    # Replace all style blocks with a single marker
-    stripped = STYLE_RE.sub("", stripped)
-    stripped = stripped.replace("</head>", "__STYLES__\n</head>", 1)
+    stripped = STYLE_RE.sub("", html)
+    # Insert marker — try </head> first, fall back to start of <body>, then top of file
+    if "</head>" in stripped:
+        stripped = stripped.replace("</head>", "__STYLES__\n</head>", 1)
+    elif "<body" in stripped:
+        stripped = re.sub(r'(<body[^>]*>)', r'\1\n__STYLES__', stripped, count=1)
+    else:
+        stripped = "__STYLES__\n" + stripped
     return css, stripped
 
 def inject_css(html_template: str, new_css: str) -> str:
@@ -1040,7 +1044,7 @@ def beautify(src_dir: Path) -> bool:
 
     # Load from last completed pass
     def latest_html() -> str:
-        for fname in ("index_pass3.html", "index_pass2.html", "index_pass1.html", "index_original.html"):
+        for fname in ("index_pass5.html", "index_pass4.html", "index_pass3.html", "index_pass2.html", "index_pass1.html", "index_original.html"):
             f = out_dir / fname
             if f.exists():
                 return f.read_text(encoding="utf-8", errors="ignore")
@@ -1081,8 +1085,7 @@ def beautify(src_dir: Path) -> bool:
     aspect_h  = theme_data.get("aspect_h",  16)
     max_width = theme_data.get("max_width", 480)
     # Derive representative screen dimensions for PASS3 context
-    screen_height = 844
-    screen_width  = int(screen_height * aspect_w / aspect_h)
+    screen_height = int(max_width * aspect_h / aspect_w)
 
     # ── Pass 1: strip UI ──────────────────────────────────────────────────────
     if not prog.get("pass1"):
@@ -1230,6 +1233,7 @@ def beautify(src_dir: Path) -> bool:
         r = call_llm(prompt, html, "pass4d")
         if r:
             html = fix_css_issues(r)
+            (out_dir / "index_pass4.html").write_text(html, encoding="utf-8")
             prog["pass4_wire"] = True
         else:
             prog["pass4_wire_failed"] = True
@@ -1253,6 +1257,7 @@ def beautify(src_dir: Path) -> bool:
         r = call_llm(PASS5, pass5_input, "pass5", max_tokens=65536)
         if r:
             html = r
+            (out_dir / "index_pass5.html").write_text(html, encoding="utf-8")
             prog["pass5"] = True
         else:
             prog["pass5_failed"] = True
@@ -1301,7 +1306,8 @@ def main():
             prog_f = BEAUTIFIED / gdir.name / ".progress.json"
             if prog_f.exists():
                 prog = json.loads(prog_f.read_text())
-                pass4_done = prog.get("pass4") or prog.get("pass4_skipped") or prog.get("pass4_failed")
+                pass4_done = (prog.get("pass4") or prog.get("pass4_skipped") or prog.get("pass4_failed")
+                              or prog.get("pass4_assets") or prog.get("pass4_assets_skipped"))
                 pass5_done = prog.get("pass5") or prog.get("pass5_failed")
                 if pass4_done and pass5_done:
                     print(f"[{i}/{len(games)}] ↷ already done: {gdir.name}\n")
