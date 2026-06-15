@@ -1077,15 +1077,32 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 0: determine visual theme + screen size ─────────────────────────
     theme_json = prog.get("theme_json")
     if not theme_json:
-        print("    → Pass 0: determine visual theme + screen size")
-        pass0_input = game_context_for_pass0(html)  # structure + JS excerpt
-        r = call_llm(PASS0, pass0_input, "pass0", max_tokens=1024)
+        print("    → Pass 0: determine visual theme + screen size (Trinity Protocol)")
+        pass0_input = game_context_for_pass0(html)
+        pass0_problem = (
+            f"Analyse this HTML game and decide the single best visual theme, layout, and aspect ratio.\n\n"
+            f"Game structure and JS mechanics:\n{pass0_input}\n\n"
+            f"Return ONLY valid JSON (no markdown, no explanation):\n"
+            f'{{"theme":"<2-5 word theme>","palette":["<hex>","<hex>","<hex>","<hex>"],'
+            f'"mood":"<one sentence>","font_style":"<e.g. rounded playful>","aspect_w":<int>,"aspect_h":<int>,"max_width":<int>}}\n\n'
+            f"Aspect ratio rules: 9:16 portrait (max_width 480) for most games. "
+            f"16:9 landscape (max_width 800) ONLY for side-scrollers, racing, or wide-canvas games."
+        )
+        r = tp_analyze(
+            problem=pass0_problem,
+            fallback_system=PASS0,
+            fallback_html=pass0_input,
+            label="pass0",
+            max_tokens=1024,
+        )
         if r:
             try:
-                raw = _strip_fences(r)
-                json.loads(raw)  # validate
-                theme_json = raw
-                prog["theme_json"] = theme_json
+                parsed = _extract_json_from_solve(r)
+                if parsed:
+                    theme_json = json.dumps(parsed)
+                    prog["theme_json"] = theme_json
+                else:
+                    raise ValueError("no JSON found in solve() output")
             except Exception as e:
                 print(f"    ⚠  pass0: could not parse theme — {e}")
                 theme_json = '{"theme":"casual arcade","palette":["#4A90D9","#F5A623","#7ED321","#D0021B"],"mood":"Bright and energetic.","font_style":"rounded playful","aspect_w":9,"aspect_h":16,"max_width":480}'

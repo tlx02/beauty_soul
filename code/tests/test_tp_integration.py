@@ -43,3 +43,15 @@ def test_tp_analyze_falls_back_to_call_llm_on_bad_json(tmp_path):
             result = tp_analyze("test problem", "fallback_system_prompt", "html content", "test-label", max_tokens=256)
             assert mock_llm.called
             assert result is not None
+
+
+def test_pass0_theme_via_tp_analyze_parses_to_valid_schema(tmp_path):
+    """tp_analyze for Pass 0 must produce parseable JSON matching the theme schema."""
+    from beautify_games import _extract_json_from_solve
+    mock_output = '```json\n{"theme":"deep sea adventure","palette":["#0a2342","#1b6ca8","#f0c040","#ffffff"],"mood":"Mysterious and calming","font_style":"rounded playful","aspect_w":9,"aspect_h":16,"max_width":480}\n```'
+    result = _extract_json_from_solve(mock_output)
+    assert result is not None
+    required_keys = {"theme", "palette", "mood", "font_style", "aspect_w", "aspect_h", "max_width"}
+    assert required_keys.issubset(result.keys())
+    assert isinstance(result["palette"], list)
+    assert isinstance(result["aspect_w"], int)
