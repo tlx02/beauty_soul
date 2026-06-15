@@ -685,6 +685,38 @@ def analyze_game(html: str) -> dict:
         "has_drag":          has_drag,
     }
 
+def extract_js_symbols(html: str) -> set:
+    """Extract JS function names from all script tags."""
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+    js = "\n".join(scripts)
+    named = set(re.findall(r'function\s+(\w+)\s*\(', js))
+    arrow = set(re.findall(r'(?:const|let|var)\s+(\w+)\s*=\s*(?:function|\([^)]*\)\s*=>|\w+\s*=>)', js))
+    return named | arrow
+
+
+def validate_js_syntax(html: str) -> list:
+    """Extract JS and check syntax via `node --check`. Returns list of error lines."""
+    import subprocess, tempfile, os as _os
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+    if not scripts:
+        return []
+    js = "\n".join(scripts)
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".js", mode="w", delete=False, encoding="utf-8") as f:
+            f.write(js)
+            tmp = f.name
+        result = subprocess.run(
+            ["node", "--check", tmp],
+            capture_output=True, text=True, timeout=10
+        )
+        _os.unlink(tmp)
+        return result.stderr.splitlines() if result.returncode != 0 else []
+    except FileNotFoundError:
+        return []  # node not installed — skip silently
+    except Exception:
+        return []
+
+
 def game_context_for_pass0(html: str) -> str:
     """Build richer Pass 0 input: structure + first 12000 chars of JS for mechanic understanding."""
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
@@ -1234,6 +1266,17 @@ def beautify(src_dir: Path) -> bool:
                     r = r2
                 else:
                     print(f"    ⚠  pass1-retry call failed, using original (missing: {missing})")
+            # JS invariant check — critical functions must not be removed by restructuring
+            before_symbols = extract_js_symbols(html)  # html is still the pre-pass1 original here
+            if before_symbols:
+                after_symbols = extract_js_symbols(r)
+                removed = before_symbols - after_symbols
+                if removed:
+                    print(f"    ⚠  pass1 removed JS functions: {sorted(removed)[:5]} — retrying")
+                    symbol_note = f"\n\nCRITICAL: Do NOT remove or rename these JS functions: {sorted(removed)}. They must remain in your output."
+                    r3 = call_llm(pass1_prompt + symbol_note, html, "pass1-js-retry", max_tokens=65536)
+                    if r3:
+                        r = r3
             html = r
             (out_dir / "index_pass1.html").write_text(html, encoding="utf-8")
             prog["pass1"] = True
@@ -1250,6 +1293,14 @@ def beautify(src_dir: Path) -> bool:
         r = call_llm(PASS2, html, "pass2")
         if r:
             html = r
+            # JS syntax check — catch syntax errors introduced by Pass 2
+            js_errors = validate_js_syntax(html)
+            if js_errors:
+                print(f"    ⚠  pass2 JS syntax errors ({len(js_errors)} lines) — retrying")
+                error_note = f"\n\nJS SYNTAX ERRORS in your output:\n" + "\n".join(js_errors[:5]) + "\nFix these errors and return the complete corrected HTML."
+                r2 = call_llm(PASS2 + error_note, html, "pass2-syntax-retry")
+                if r2 and not validate_js_syntax(r2):
+                    html = r2
             (out_dir / "index_pass2.html").write_text(html, encoding="utf-8")
             prog["pass2"] = True
         else:

@@ -1,5 +1,6 @@
 """Unit tests for deterministic pipeline helpers."""
-import sys, os
+import sys, os, shutil
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from beautify_games import extract_css, inject_css
 
@@ -156,3 +157,34 @@ def test_generate_images_parallel_returns_failed_set():
         with patch("beautify_games.gen_image", return_value=False):
             failed = generate_images_parallel(images, img_dir, max_workers=2, style_lock=None, genre_direction="")
         assert failed == {"a.png", "b.png"}
+
+
+# ── JS quality helpers ─────────────────────────────────────────────────────────
+
+def test_extract_js_symbols_finds_functions():
+    from beautify_games import extract_js_symbols
+    html = "<script>function startGame() {} function resetScore() {} const update = () => {}</script>"
+    symbols = extract_js_symbols(html)
+    assert "startGame" in symbols
+    assert "resetScore" in symbols
+
+
+def test_extract_js_symbols_empty_on_no_script():
+    from beautify_games import extract_js_symbols
+    assert extract_js_symbols("<html><body></body></html>") == set()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_validate_js_syntax_valid():
+    from beautify_games import validate_js_syntax
+    html = "<script>function foo() { return 1 + 1; }</script>"
+    errors = validate_js_syntax(html)
+    assert errors == []
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_validate_js_syntax_invalid():
+    from beautify_games import validate_js_syntax
+    html = "<script>function foo( { return; }</script>"  # missing closing paren
+    errors = validate_js_syntax(html)
+    assert len(errors) > 0
