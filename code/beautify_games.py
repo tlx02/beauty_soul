@@ -1210,7 +1210,7 @@ def beautify(src_dir: Path) -> bool:
         style_problem = (
             f"Game genre: {genre}\n"
             f"Approved theme: {theme_json}\n\n"
-            f"Current CSS (shows committed colours and typography):\n{css_sample[:3000]}\n\n"
+            f"Current CSS (shows committed colours and typography):\n{css_sample[:3000].rsplit('}', 1)[0] + '}'}\n\n"
             f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
         )
         r = tp_analyze(
