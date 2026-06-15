@@ -1153,6 +1153,56 @@ def gen_audio(description: str, duration: float, out: Path) -> bool:
         print(f"    ✗  audio {out.name}: {e}")
         return False
 
+
+# ─── Playwright smoke test ─────────────────────────────────────────────────────
+def smoke_test(out_dir: Path) -> dict:
+    """Run the final game in headless Chromium. Returns dict with pass/fail + JS errors.
+    Checks: home screen active on load, PLAY button navigates to game, no JS errors for 3s."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"passed": None, "home_active": None, "game_active": None,
+                "js_errors": [], "skip_reason": "playwright not installed"}
+
+    js_errors: list[str] = []
+    home_active = False
+    game_active = False
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 480, "height": 854})
+            page.on("pageerror", lambda e: js_errors.append(str(e)))
+            page.goto(f"file://{out_dir}/index.html", wait_until="domcontentloaded")
+            page.wait_for_timeout(500)
+
+            home_active = page.evaluate(
+                "!!document.getElementById('screen-home')?.classList.contains('active')"
+            ) or False
+
+            try:
+                page.click("#btn-start", timeout=3000)
+                page.wait_for_timeout(2000)
+                game_active = page.evaluate(
+                    "!!document.getElementById('screen-game')?.classList.contains('active')"
+                ) or False
+            except Exception as e:
+                js_errors.append(f"btn-start click failed: {e}")
+
+            page.wait_for_timeout(3000)
+            browser.close()
+    except Exception as e:
+        js_errors.append(f"browser error: {e}")
+
+    passed = home_active and game_active and len(js_errors) == 0
+    return {
+        "passed": passed,
+        "home_active": home_active,
+        "game_active": game_active,
+        "js_errors": js_errors,
+    }
+
+
 # ─── Single-game pipeline ─────────────────────────────────────────────────────
 def beautify(src_dir: Path) -> bool:
     name    = src_dir.name
@@ -1464,8 +1514,48 @@ def beautify(src_dir: Path) -> bool:
             prog["pass5_failed"] = True
         save_prog()
 
-    # ── Write final ───────────────────────────────────────────────────────────
-    (out_dir / "index.html").write_text(html, encoding="utf-8")
+    # ── Pass 6: Playwright smoke test + error-driven retry ────────────────────
+    smoke_result = prog.get("smoke_result")
+    if not smoke_result:
+        print("    → Pass 6: smoke test")
+        # Write current html to index.html first so smoke_test can load it
+        (out_dir / "index.html").write_text(html, encoding="utf-8")
+        smoke_result = smoke_test(out_dir)
+        prog["smoke_result"] = smoke_result
+        if smoke_result.get("skip_reason"):
+            print(f"    ○ smoke test skipped: {smoke_result['skip_reason']}")
+        elif smoke_result["passed"]:
+            print(f"    ✓ smoke test passed")
+        else:
+            issues = []
+            if not smoke_result.get("home_active"):
+                issues.append("screen-home does not have class 'active' on load")
+            if not smoke_result.get("game_active"):
+                issues.append("screen-game did not become active after clicking #btn-start")
+            if smoke_result.get("js_errors"):
+                issues.extend(smoke_result["js_errors"][:3])
+            print(f"    ⚠  smoke test FAILED: {issues}")
+            # Pass 6 retry — feed exact errors back to the LLM
+            for attempt in range(2):
+                error_context = "\n".join(f"- {i}" for i in issues)
+                fix_prompt = (
+                    f"SMOKE TEST FAILED. The following issues were detected by running "
+                    f"the game in a real browser:\n{error_context}\n\n"
+                    f"Fix ONLY these issues. Do not change game mechanics, visuals, or assets.\n"
+                    f"Return ONLY the complete fixed HTML."
+                )
+                r = call_llm(fix_prompt, html, f"pass6-retry-{attempt+1}", max_tokens=65536)
+                if r:
+                    html = r
+                    (out_dir / "index.html").write_text(html, encoding="utf-8")
+                    smoke_result = smoke_test(out_dir)
+                    prog["smoke_result"] = smoke_result
+                    if smoke_result["passed"]:
+                        print(f"    ✓ smoke test passed after retry {attempt+1}")
+                        break
+                    issues = smoke_result.get("js_errors", [])[:3]
+        save_prog()
+
     print(f"    ✓ done → beautified/{name}/index.html")
     return True
 
