@@ -1553,7 +1553,13 @@ def beautify(src_dir: Path) -> bool:
                     if smoke_result["passed"]:
                         print(f"    ✓ smoke test passed after retry {attempt+1}")
                         break
-                    issues = smoke_result.get("js_errors", [])[:3]
+                    issues = []
+                    if not smoke_result.get("home_active"):
+                        issues.append("screen-home does not have class 'active' on load")
+                    if not smoke_result.get("game_active"):
+                        issues.append("screen-game did not become active after clicking #btn-start")
+                    if smoke_result.get("js_errors"):
+                        issues.extend(smoke_result["js_errors"][:3])
         save_prog()
 
     print(f"    ✓ done → beautified/{name}/index.html")
