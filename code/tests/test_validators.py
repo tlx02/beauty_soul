@@ -138,3 +138,21 @@ def test_pass4a_has_three_background_variants():
     assert "background_home.png" in PASS4A
     assert "background_game.png" in PASS4A
     assert "background_gameover.png" in PASS4A
+
+
+def test_generate_images_parallel_returns_failed_set():
+    """Parallel generator must return set of failed filenames."""
+    from unittest.mock import patch
+    from pathlib import Path
+    import tempfile
+    from beautify_games import generate_images_parallel
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        img_dir = Path(tmpdir)
+        images = [
+            {"filename": "a.png", "description": "test", "transparent": True},
+            {"filename": "b.png", "description": "test", "transparent": False},
+        ]
+        with patch("beautify_games.gen_image", return_value=False):
+            failed = generate_images_parallel(images, img_dir, max_workers=2, style_lock=None, genre_direction="")
+        assert failed == {"a.png", "b.png"}

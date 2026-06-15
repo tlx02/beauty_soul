@@ -1027,6 +1027,68 @@ def gen_image(description: str, out: Path, transparent: bool = False) -> bool:
         print(f"    ✗  image {out.name}: {e}")
         return False
 
+def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
+                              style_lock: dict = None, genre_direction: str = "") -> set:
+    """Generate images concurrently. Returns set of failed filenames."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _build_desc(img: dict) -> tuple[str, bool]:
+        fname = img["filename"]
+        is_bg = fname.startswith("background")
+        transparent = img.get("transparent", not is_bg)
+        desc = img["description"]
+        if style_lock:
+            art = style_lock.get("art_style", "")
+            neg = style_lock.get("negative_terms", "")
+            if art:
+                desc = f"Art style: {art}. {desc}"
+            if neg and art:
+                desc = f"{desc} {neg}."
+        if genre_direction:
+            if not style_lock:
+                desc = f"Art style: {genre_direction}. {desc}"
+            else:
+                desc = f"{desc} Genre-specific style: {genre_direction}."
+        if transparent:
+            desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
+        return desc, transparent
+
+    def _gen_one(img: dict) -> tuple[str, bool]:
+        fname = img["filename"]
+        out_path = img_dir / fname
+        if out_path.exists():
+            try:
+                actual = PILImage.open(out_path)
+                img["w"], img["h"] = actual.size
+            except Exception:
+                pass
+            return fname, True
+        desc, transparent = _build_desc(img)
+        ok = gen_image(desc, out_path, transparent=transparent)
+        if not ok:
+            time.sleep(2)
+            ok = gen_image(desc, out_path, transparent=transparent)
+        if ok and out_path.exists():
+            try:
+                actual = PILImage.open(out_path)
+                img["w"], img["h"] = actual.size
+            except Exception:
+                pass
+        return fname, ok
+
+    failed = set()
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_gen_one, img): img for img in images}
+        for f in as_completed(futures):
+            fname, ok = f.result()
+            if not ok:
+                failed.add(fname)
+                print(f"    ✗  image {fname}: failed after retry")
+            else:
+                print(f"    ✓  image {fname}")
+    return failed
+
+
 # ─── Audio generation ─────────────────────────────────────────────────────────
 def gen_audio(description: str, duration: float, out: Path) -> bool:
     try:
@@ -1267,52 +1329,14 @@ def beautify(src_dir: Path) -> bool:
             genre_direction = config.get("genre_art_direction", {}).get(
                 game_meta.get("genre", "misc") if game_meta else "misc", ""
             )
-            failed_images = set()
-            for img in manifest.get("images", []):
-                fname = img["filename"]
-                is_bg = fname.startswith("background")
-                transparent = img.get("transparent", not is_bg)
-                out_path = img_dir / fname
-                if out_path.exists():
-                    print(f"    → Pass 4b: image  {fname} (cached)")
-                    try:
-                        actual = PILImage.open(out_path)
-                        img["w"], img["h"] = actual.size
-                    except Exception:
-                        pass
-                    continue
-                print(f"    → Pass 4b: image  {fname}{' (transparent)' if transparent else ''}")
-                desc = img["description"]
-                # Prepend style lock for visual coherence across all assets
-                if style_lock:
-                    art = style_lock.get("art_style", "")
-                    neg = style_lock.get("negative_terms", "")
-                    if art:
-                        desc = f"Art style: {art}. {desc}"
-                    if neg and art:
-                        desc = f"{desc} {neg}."
-                # Add genre-specific art direction
-                if genre_direction:
-                    if not style_lock:
-                        desc = f"Art style: {genre_direction}. {desc}"
-                    else:
-                        desc = f"{desc} Genre-specific style: {genre_direction}."
-                if transparent:
-                    desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
-                ok = gen_image(desc, out_path, transparent=transparent)
-                if not ok:
-                    time.sleep(2)
-                    ok = gen_image(desc, out_path, transparent=transparent)
-                if not ok:
-                    failed_images.add(fname)
-                elif out_path.exists():
-                    # Overwrite w/h with actual generated dimensions
-                    try:
-                        actual = PILImage.open(out_path)
-                        img["w"], img["h"] = actual.size
-                    except Exception:
-                        pass
-                time.sleep(1)
+            print(f"    → Pass 4b: generating {len(manifest.get('images', []))} images (parallel, max 4 workers)")
+            failed_images = generate_images_parallel(
+                manifest.get("images", []),
+                img_dir,
+                max_workers=4,
+                style_lock=style_lock,
+                genre_direction=genre_direction,
+            )
 
             if failed_images:
                 manifest["images"] = [i for i in manifest["images"] if i["filename"] not in failed_images]
