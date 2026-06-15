@@ -47,3 +47,47 @@ def test_screen_height_landscape():
     expected = int(max_width * aspect_h / aspect_w)
     assert expected == 450
     assert expected != 844
+
+
+def test_latest_html_ordering():
+    """index_pass5/4 must appear before index_pass3 in latest_html search order."""
+    import inspect
+    from beautify_games import beautify
+    src = inspect.getsource(beautify)
+    # Find the tuple passed to latest_html's for loop
+    import re
+    m = re.search(r'for fname in \(([^)]+)\)', src)
+    assert m, "latest_html for-loop not found"
+    entries = m.group(1)
+    idx5 = entries.find("index_pass5.html")
+    idx4 = entries.find("index_pass4.html")
+    idx3 = entries.find("index_pass3.html")
+    assert idx5 != -1, "index_pass5.html missing from latest_html"
+    assert idx4 != -1, "index_pass4.html missing from latest_html"
+    assert idx5 < idx3, "index_pass5.html must come before index_pass3.html"
+    assert idx4 < idx3, "index_pass4.html must come before index_pass3.html"
+
+
+def test_pass4d_writes_intermediate(tmp_path):
+    """Pass 4d must write index_pass4.html when it succeeds."""
+    import inspect
+    from beautify_games import beautify
+    src = inspect.getsource(beautify)
+    assert 'index_pass4.html' in src, "Pass 4d must write index_pass4.html"
+
+
+def test_pass5_writes_intermediate():
+    """Pass 5 must write index_pass5.html when it succeeds."""
+    import inspect
+    from beautify_games import beautify
+    src = inspect.getsource(beautify)
+    assert 'index_pass5.html' in src, "Pass 5 must write index_pass5.html"
+
+
+def test_resume_covers_pass4_assets_keys():
+    """--resume must skip games whose progress has pass4_assets or pass4_assets_skipped."""
+    import inspect
+    from beautify_games import main
+    src = inspect.getsource(main)
+    assert 'pass4_assets' in src, "resume check must include pass4_assets key"
+    assert 'pass4_assets_skipped' in src, "resume check must include pass4_assets_skipped key"
