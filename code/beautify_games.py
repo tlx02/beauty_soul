@@ -367,16 +367,16 @@ REQUIRED — always include all nine:
      Minimal detail — must not compete with game elements. Subtle texture or gradient only.
   3. background_gameover.png — background for the GAME OVER screen.
      Dramatic darker variant of background_home.png. Slightly ominous or reflective mood.
-  2. game_preview.png — gameplay preview on title screen. Key game elements mid-play, 1:1 ratio,
+  4. game_preview.png — gameplay preview on title screen. Key game elements mid-play, 1:1 ratio,
      transparent background, no text or UI chrome.
-  3. title.png — styled game title logo. Bold themed lettering, transparent background.
-  4. btn_play.png — PLAY button for the title screen. Pill/badge shape with "PLAY" text,
+  5. title.png — styled game title logo. Bold themed lettering, transparent background.
+  6. btn_play.png — PLAY button for the title screen. Pill/badge shape with "PLAY" text,
      transparent background.
-  5. btn_home.png — home icon button for the in-game topbar (#btn-home-game). Small, themed,
+  7. btn_home.png — home icon button for the in-game topbar (#btn-home-game). Small, themed,
      icon only (no text), transparent background.
-  6. btn_pause.png — pause icon button for the in-game topbar (#btn-pause-game). Same style as
+  8. btn_pause.png — pause icon button for the in-game topbar (#btn-pause-game). Same style as
      btn_home.png, two vertical bars, transparent background.
-  7. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
+  9. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
      Styled to match the game theme. NO text, NO buttons baked in. Transparent background.
 
 OPTIONAL UI CHROME — up to 4 additional panel/frame images. These make the game feel real.
@@ -1189,7 +1189,8 @@ def smoke_test(out_dir: Path) -> dict:
             except Exception as e:
                 js_errors.append(f"btn-start click failed: {e}")
 
-            page.wait_for_timeout(3000)
+            if game_active:
+                page.wait_for_timeout(3000)
             browser.close()
     except Exception as e:
         js_errors.append(f"browser error: {e}")
@@ -1229,7 +1230,8 @@ def beautify(src_dir: Path) -> bool:
     def save_prog(): prog_f.write_text(json.dumps(prog, indent=2))
 
     # Migrate old pass4 flag → new split flags so existing games aren't re-processed
-    if prog.get("pass4") and not prog.get("pass4_assets"):
+    _old_pass4_done = prog.get("pass4") or prog.get("pass4_skipped") or prog.get("pass4_failed")
+    if _old_pass4_done and not prog.get("pass4_assets"):
         prog["pass4_assets"] = True
         prog["pass4_wire"] = True
         mf = out_dir / "assets" / "manifest.json"
@@ -1397,7 +1399,7 @@ def beautify(src_dir: Path) -> bool:
         style_problem = (
             f"Game genre: {genre}\n"
             f"Approved theme: {theme_json}\n\n"
-            f"Current CSS (shows committed colours and typography):\n{css_sample[:3000].rsplit('}', 1)[0] + '}'}\n\n"
+            f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
             f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
         )
         r = tp_analyze(
@@ -1428,10 +1430,9 @@ def beautify(src_dir: Path) -> bool:
             manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=4096)
         manifest = None
         if manifest_raw:
-            try:
-                manifest = json.loads(_strip_fences(manifest_raw))
-            except Exception as e:
-                print(f"    ⚠  pass4a: could not parse manifest — {e}")
+            manifest = _extract_json_from_solve(manifest_raw)
+            if manifest is None:
+                print(f"    ⚠  pass4a: could not parse manifest")
 
         if manifest:
             img_dir = out_dir / "assets" / "images"
@@ -1607,7 +1608,8 @@ def main():
                               or prog.get("pass4_assets") or prog.get("pass4_assets_skipped")
                               or prog.get("pass4_wire") or prog.get("pass4_wire_failed"))
                 pass5_done = prog.get("pass5") or prog.get("pass5_failed")
-                if pass4_done and pass5_done:
+                smoke_done = prog.get("smoke_result", {}).get("passed") is not False
+                if pass4_done and pass5_done and smoke_done:
                     print(f"[{i}/{len(games)}] ↷ already done: {gdir.name}\n")
                     ok += 1
                     continue
