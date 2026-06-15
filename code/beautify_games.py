@@ -604,8 +604,8 @@ def extract_css(html: str) -> tuple[str, str]:
     # Insert marker — try </head> first, fall back to start of <body>, then top of file
     if "</head>" in stripped:
         stripped = stripped.replace("</head>", "__STYLES__\n</head>", 1)
-    elif "<body" in stripped:
-        stripped = re.sub(r'(<body[^>]*>)', r'\1\n__STYLES__', stripped, count=1)
+    elif re.search(r'<body', stripped, re.IGNORECASE):
+        stripped = re.sub(r'(<body[^>]*>)', r'\1\n__STYLES__', stripped, count=1, flags=re.IGNORECASE)
     else:
         stripped = "__STYLES__\n" + stripped
     return css, stripped
@@ -1307,7 +1307,8 @@ def main():
             if prog_f.exists():
                 prog = json.loads(prog_f.read_text())
                 pass4_done = (prog.get("pass4") or prog.get("pass4_skipped") or prog.get("pass4_failed")
-                              or prog.get("pass4_assets") or prog.get("pass4_assets_skipped"))
+                              or prog.get("pass4_assets") or prog.get("pass4_assets_skipped")
+                              or prog.get("pass4_wire") or prog.get("pass4_wire_failed"))
                 pass5_done = prog.get("pass5") or prog.get("pass5_failed")
                 if pass4_done and pass5_done:
                     print(f"[{i}/{len(games)}] ↷ already done: {gdir.name}\n")
