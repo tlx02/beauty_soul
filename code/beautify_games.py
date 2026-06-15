@@ -884,7 +884,7 @@ def _extract_json_from_solve(text: str) -> dict | None:
                 except Exception:
                     pass
         import re as _re
-        m = _re.search(r'\{.*\}', c, _re.DOTALL)
+        m = _re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', c)
         if m:
             try:
                 return _json.loads(m.group())
@@ -910,7 +910,9 @@ def tp_analyze(problem: str, fallback_system: str, fallback_html: str,
                 verify_consistency=bool(file_paths),
                 adaptive=True,
             )
-            if result and len(result.strip()) > 10 and "{" in result:
+            stripped_r = result.strip() if result else ""
+            probe = _strip_fences(stripped_r).lstrip()
+            if stripped_r and len(stripped_r) > 10 and probe.startswith("{"):
                 return result
             print(f"    ⚠  tp_analyze {label}: empty or non-JSON response, falling back")
         except Exception as e:
