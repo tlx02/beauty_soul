@@ -1276,6 +1276,15 @@ def beautify(src_dir: Path) -> bool:
                         desc = f"Art style: {art}. {desc}"
                     if neg:
                         desc = f"{desc} {neg}."
+                # Add genre-specific art direction
+                genre_direction = config.get("genre_art_direction", {}).get(
+                    game_meta.get("genre", "misc") if game_meta else "misc", ""
+                )
+                if genre_direction:
+                    if not style_lock:
+                        desc = f"Art style: {genre_direction}. {desc}"
+                    else:
+                        desc = f"{desc} Genre-specific style: {genre_direction}."
                 if transparent:
                     desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
                 ok = gen_image(desc, out_path, transparent=transparent)

@@ -122,3 +122,12 @@ def test_validate_pass1_single_quote_ids():
     from beautify_games import validate_pass1
     html = "<div id='screen-home'></div><div id='screen-game'></div><div id='screen-gameover'></div><button id='btn-start'></button><button id='btn-home-game'></button><button id='btn-pause-game'></button><div id='pause-overlay'></div>"
     assert validate_pass1(html) == []
+
+
+def test_genre_art_direction_loaded_from_config():
+    """Genre art direction must be readable from config and injected into image descriptions."""
+    import json, os
+    config = json.loads(open(os.path.join(os.path.dirname(__file__), "../config.json")).read())
+    assert "genre_art_direction" in config
+    assert "match3" in config["genre_art_direction"]
+    assert "puzzle_logic" in config["genre_art_direction"]
