@@ -89,6 +89,20 @@ Return ONLY valid JSON — no markdown, no explanation:
   "max_width": <integer px, e.g. 480>
 }"""
 
+STYLE_LOCK = """\
+Given this game's approved visual theme and a sample of the game's CSS (so you understand what colours are already committed), generate a terse art direction brief.
+This brief will be prepended verbatim to EVERY image generation prompt, so all assets share one visual language.
+
+Return ONLY valid JSON:
+{{
+  "art_style": "<one precise phrase: e.g. 'flat vector illustration, 2px black stroke, pastel palette'>",
+  "line_weight": "<e.g. 'clean 2px stroke, no texture'>",
+  "shadow_style": "<e.g. 'soft drop-shadow only, no hard shadows'>",
+  "background_treatment": "<e.g. 'bokeh depth blur, warm ambient light'>",
+  "icon_shape": "<e.g. 'rounded rectangle, 12px corner radius, badge style'>",
+  "negative_terms": "<e.g. 'no photorealism, no gradients, no lens flare, no text baked in'>"
+}}"""
+
 PASS1 = """\
 You are a game developer restructuring an HTML game into a clean 3-screen brandable template.
 
@@ -1187,6 +1201,33 @@ def beautify(src_dir: Path) -> bool:
     elif (out_dir / "index_pass3.html").exists():
         html = (out_dir / "index_pass3.html").read_text(encoding="utf-8")
 
+    # ── Pass 0.5: style lock (shared art direction for all image generation) ──
+    style_lock = prog.get("style_lock")
+    if not style_lock and prog.get("pass3"):
+        print("    → Pass 0.5: generate style lock (Trinity Protocol)")
+        css_sample, _ = extract_css(html)
+        genre = game_meta.get("genre", "misc") if game_meta else "misc"
+        style_problem = (
+            f"Game genre: {genre}\n"
+            f"Approved theme: {theme_json}\n\n"
+            f"Current CSS (shows committed colours and typography):\n{css_sample[:3000]}\n\n"
+            f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
+        )
+        r = tp_analyze(
+            problem=style_problem,
+            fallback_system=STYLE_LOCK,
+            fallback_html=f"Genre: {genre}\nTheme: {theme_json}",
+            label="style-lock",
+            max_tokens=512,
+        )
+        if r:
+            parsed = _extract_json_from_solve(r)
+            if parsed:
+                style_lock = parsed
+                prog["style_lock"] = style_lock
+                print(f"    ○ style: {style_lock.get('art_style', '?')}")
+        save_prog()
+
     # ── Pass 4a-c: determine + generate assets ───────────────────────────────
     manifest = prog.get("manifest")
     if not prog.get("pass4_assets"):
@@ -1227,6 +1268,14 @@ def beautify(src_dir: Path) -> bool:
                     continue
                 print(f"    → Pass 4b: image  {fname}{' (transparent)' if transparent else ''}")
                 desc = img["description"]
+                # Prepend style lock for visual coherence across all assets
+                if style_lock:
+                    art = style_lock.get("art_style", "")
+                    neg = style_lock.get("negative_terms", "")
+                    if art:
+                        desc = f"Art style: {art}. {desc}"
+                    if neg:
+                        desc = f"{desc} {neg}."
                 if transparent:
                     desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
                 ok = gen_image(desc, out_path, transparent=transparent)

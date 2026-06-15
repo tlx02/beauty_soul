@@ -55,3 +55,13 @@ def test_pass0_theme_via_tp_analyze_parses_to_valid_schema(tmp_path):
     assert required_keys.issubset(result.keys())
     assert isinstance(result["palette"], list)
     assert isinstance(result["aspect_w"], int)
+
+
+def test_extract_style_lock_from_solve():
+    """Style lock must parse to a dict with required art direction keys."""
+    from beautify_games import _extract_json_from_solve
+    mock = '```json\n{"art_style":"flat vector, 2px stroke","line_weight":"clean 2px","shadow_style":"soft drop-shadow","background_treatment":"bokeh blur","icon_shape":"rounded rect 12px","negative_terms":"no photorealism"}\n```'
+    result = _extract_json_from_solve(mock)
+    assert result is not None
+    assert "art_style" in result
+    assert "negative_terms" in result
