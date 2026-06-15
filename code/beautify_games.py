@@ -701,6 +701,7 @@ def validate_js_syntax(html: str) -> list:
     if not scripts:
         return []
     js = "\n".join(scripts)
+    tmp = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".js", mode="w", delete=False, encoding="utf-8") as f:
             f.write(js)
@@ -709,12 +710,17 @@ def validate_js_syntax(html: str) -> list:
             ["node", "--check", tmp],
             capture_output=True, text=True, timeout=10
         )
-        _os.unlink(tmp)
         return result.stderr.splitlines() if result.returncode != 0 else []
     except FileNotFoundError:
         return []  # node not installed — skip silently
     except Exception:
         return []
+    finally:
+        if tmp:
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def game_context_for_pass0(html: str) -> str:
