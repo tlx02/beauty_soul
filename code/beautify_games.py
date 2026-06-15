@@ -1080,12 +1080,18 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(_gen_one, img): img for img in images}
         for f in as_completed(futures):
-            fname, ok = f.result()
-            if not ok:
+            img = futures[f]
+            try:
+                fname, ok = f.result()
+                if not ok:
+                    failed.add(fname)
+                    print(f"    ✗  image {fname}: failed after retry")
+                else:
+                    print(f"    ✓  image {fname}")
+            except Exception as e:
+                fname = img["filename"]
                 failed.add(fname)
-                print(f"    ✗  image {fname}: failed after retry")
-            else:
-                print(f"    ✓  image {fname}")
+                print(f"    ✗  image {fname}: exception — {e}")
     return failed
 
 
