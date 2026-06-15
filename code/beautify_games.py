@@ -846,6 +846,19 @@ def fix_css_issues(html: str) -> str:
 
     return inject_css(html_template, f"<style>\n{css.strip()}\n</style>")
 
+_PASS1_REQUIRED_IDS = [
+    "screen-home", "screen-game", "screen-gameover",
+    "btn-start", "btn-home-game", "btn-pause-game", "pause-overlay",
+]
+
+def validate_pass1(html: str) -> list[str]:
+    """Return list of required IDs missing from html. Empty list = valid."""
+    missing = []
+    for id_ in _PASS1_REQUIRED_IDS:
+        if f'id="{id_}"' not in html and f"id='{id_}'" not in html:
+            missing.append(id_)
+    return missing
+
 def call_llm(system: str, html: str, label: str, max_tokens: int = MAX_TOKENS) -> str | None:
     try:
         res = client.chat.completions.create(
@@ -1096,6 +1109,16 @@ def beautify(src_dir: Path) -> bool:
             time.sleep(3)
             r = call_llm(pass1_prompt, html, "pass1 (retry)", max_tokens=65536)
         if r:
+            missing = validate_pass1(r)
+            if missing:
+                print(f"    ⚠  pass1 missing IDs {missing} — retrying with constraint")
+                retry_prompt = pass1_prompt + f"\n\nRETRY REQUIRED: your previous output was missing these required element IDs: {missing}. They MUST all be present in your output."
+                r2 = call_llm(retry_prompt, html, "pass1-retry", max_tokens=65536)
+                if r2:
+                    still_missing = validate_pass1(r2)
+                    if still_missing:
+                        print(f"    ⚠  pass1-retry still missing {still_missing}, using best attempt")
+                    r = r2
             html = r
             (out_dir / "index_pass1.html").write_text(html, encoding="utf-8")
             prog["pass1"] = True

@@ -91,3 +91,34 @@ def test_resume_covers_pass4_assets_keys():
     src = inspect.getsource(main)
     assert 'pass4_assets' in src, "resume check must include pass4_assets key"
     assert 'pass4_assets_skipped' in src, "resume check must include pass4_assets_skipped key"
+
+
+# ── Per-pass structural validation ────────────────────────────────────────────
+
+def test_validate_pass1_all_present():
+    from beautify_games import validate_pass1
+    html = '''<div class="app-container">
+      <div id="screen-home" class="screen active"></div>
+      <div id="screen-game" class="screen"></div>
+      <div id="screen-gameover" class="screen"></div>
+      <button id="btn-start"></button>
+      <button id="btn-home-game"></button>
+      <button id="btn-pause-game"></button>
+      <div id="pause-overlay"></div>
+    </div>'''
+    assert validate_pass1(html) == []
+
+
+def test_validate_pass1_missing_ids():
+    from beautify_games import validate_pass1
+    html = '<div id="screen-home"></div><div id="screen-game"></div>'
+    missing = validate_pass1(html)
+    assert "screen-gameover" in missing
+    assert "btn-start" in missing
+    assert "pause-overlay" in missing
+
+
+def test_validate_pass1_single_quote_ids():
+    from beautify_games import validate_pass1
+    html = "<div id='screen-home'></div><div id='screen-game'></div><div id='screen-gameover'></div><button id='btn-start'></button><button id='btn-home-game'></button><button id='btn-pause-game'></button><div id='pause-overlay'></div>"
+    assert validate_pass1(html) == []
