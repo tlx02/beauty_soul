@@ -1105,8 +1105,10 @@ def beautify(src_dir: Path) -> bool:
                     raise ValueError("no JSON found in solve() output")
             except Exception as e:
                 print(f"    ⚠  pass0: could not parse theme — {e}")
-                theme_json = '{"theme":"casual arcade","palette":["#4A90D9","#F5A623","#7ED321","#D0021B"],"mood":"Bright and energetic.","font_style":"rounded playful","aspect_w":9,"aspect_h":16,"max_width":480}'
-                prog["theme_json"] = theme_json
+        if not theme_json:
+            print(f"    ⚠  pass0: using fallback casual-arcade theme")
+            theme_json = '{"theme":"casual arcade","palette":["#4A90D9","#F5A623","#7ED321","#D0021B"],"mood":"Bright and energetic.","font_style":"rounded playful","aspect_w":9,"aspect_h":16,"max_width":480}'
+            prog["theme_json"] = theme_json
         save_prog()
 
     # Extract layout decided by Pass 0
