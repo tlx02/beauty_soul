@@ -1252,6 +1252,9 @@ def beautify(src_dir: Path) -> bool:
             img_dir.mkdir(parents=True, exist_ok=True)
             aud_dir.mkdir(parents=True, exist_ok=True)
 
+            genre_direction = config.get("genre_art_direction", {}).get(
+                game_meta.get("genre", "misc") if game_meta else "misc", ""
+            )
             failed_images = set()
             for img in manifest.get("images", []):
                 fname = img["filename"]
@@ -1274,12 +1277,9 @@ def beautify(src_dir: Path) -> bool:
                     neg = style_lock.get("negative_terms", "")
                     if art:
                         desc = f"Art style: {art}. {desc}"
-                    if neg:
+                    if neg and art:
                         desc = f"{desc} {neg}."
                 # Add genre-specific art direction
-                genre_direction = config.get("genre_art_direction", {}).get(
-                    game_meta.get("genre", "misc") if game_meta else "misc", ""
-                )
                 if genre_direction:
                     if not style_lock:
                         desc = f"Art style: {genre_direction}. {desc}"
