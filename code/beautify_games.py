@@ -444,7 +444,9 @@ Paths: images at "assets/images/<filename>", audio at "assets/audio/<filename>".
 The screen is {aspect_w}:{aspect_h} aspect ratio, max width {max_width}px — size all assets proportionally to this.
 
 ALREADY WIRED BY TEMPLATE — do NOT add again:
-  - assets/images/background.png  (referenced via CSS .app-container background-image)
+  - assets/images/background_home.png    (CSS #screen-home background-image)
+  - assets/images/background_game.png    (CSS #screen-game background-image)
+  - assets/images/background_gameover.png (CSS #screen-gameover background-image)
   - assets/images/game_preview.png (referenced as <img class="game-preview"> on the title screen)
   - assets/images/title.png        (referenced as <img class="game-title"> on the title screen)
   - assets/images/btn_play.png     (referenced as <img> inside <button id="btn-start"> on the title screen)
@@ -1268,7 +1270,7 @@ def beautify(src_dir: Path) -> bool:
             failed_images = set()
             for img in manifest.get("images", []):
                 fname = img["filename"]
-                is_bg = fname == "background.png"
+                is_bg = fname.startswith("background")
                 transparent = img.get("transparent", not is_bg)
                 out_path = img_dir / fname
                 if out_path.exists():
