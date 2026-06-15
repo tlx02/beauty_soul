@@ -855,7 +855,7 @@ def validate_pass1(html: str) -> list[str]:
     """Return list of required IDs missing from html. Empty list = valid."""
     missing = []
     for id_ in _PASS1_REQUIRED_IDS:
-        if f'id="{id_}"' not in html and f"id='{id_}'" not in html:
+        if not re.search(r'id\s*=\s*["\']' + re.escape(id_) + r'["\']', html):
             missing.append(id_)
     return missing
 
@@ -1119,6 +1119,8 @@ def beautify(src_dir: Path) -> bool:
                     if still_missing:
                         print(f"    ⚠  pass1-retry still missing {still_missing}, using best attempt")
                     r = r2
+                else:
+                    print(f"    ⚠  pass1-retry call failed, using original (missing: {missing})")
             html = r
             (out_dir / "index_pass1.html").write_text(html, encoding="utf-8")
             prog["pass1"] = True
