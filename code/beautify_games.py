@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Game Beautification Pipeline — 5-pass automated process
-  Pass 0: determine visual theme
-  Pass 1: strip non-core UI + enforce 3-screen centred layout
-  Pass 2: fix game logic (conservative)
-  Pass 3: improve visuals using approved theme
-  Pass 4: generate + wire external image/audio assets
+Game Beautification Pipeline
+
+  Pass 0   : determine visual theme + screen size (Trinity Protocol)
+  Pass 1   : restructure HTML into 3-screen layout with required IDs
+  Pass 2   : fix game logic (conservative — no regressions)
+  Pass 3   : improve visuals using approved theme (CSS-only)
+  StyleLock: freeze art-direction JSON for consistent image generation
+  Pass 4a  : generate asset manifest (LLM decides what images/audio to create)
+  Pass 4d  : wire manifest assets into HTML (before generation — no broken images yet)
+  Pass 4b/c: generate images (parallel) and audio assets
+  Pass 5   : playability QA (orphaned elements, overlay positioning, layout)
+  Pass 6   : Playwright smoke test + error-driven retry
 
 Output goes to beautified/<game_name>/ — selected_300 is never modified.
 
@@ -90,18 +96,38 @@ Return ONLY valid JSON — no markdown, no explanation:
 }"""
 
 STYLE_LOCK = """\
-Given this game's approved visual theme and a sample of the game's CSS (so you understand what colours are already committed), generate a terse art direction brief.
-This brief will be prepended verbatim to EVERY image generation prompt, so all assets share one visual language.
+Generate a terse art direction brief for this game's image assets.
+This brief will be prepended verbatim to EVERY image generation prompt, so all assets must share one consistent visual language.
+
+If a cover image is shown above, use it as the PRIMARY reference — extract the exact rendering style,
+colour palette, line weight, and mood directly from what you see. The cover is authoritative.
+If no cover image is shown, derive the style from the theme and CSS instead.
 
 Return ONLY valid JSON:
-{{
-  "art_style": "<one precise phrase: e.g. 'flat vector illustration, 2px black stroke, pastel palette'>",
+{
+  "art_style": "<one precise phrase describing the visual style seen in the cover, e.g. 'flat vector illustration, 2px black stroke, warm earthy palette'>",
   "line_weight": "<e.g. 'clean 2px stroke, no texture'>",
   "shadow_style": "<e.g. 'soft drop-shadow only, no hard shadows'>",
   "background_treatment": "<e.g. 'bokeh depth blur, warm ambient light'>",
   "icon_shape": "<e.g. 'rounded rectangle, 12px corner radius, badge style'>",
   "negative_terms": "<e.g. 'no photorealism, no gradients, no lens flare, no text baked in'>"
-}}"""
+}"""
+
+COVER_EXTRACT = """\
+Analyse this game cover image and extract its visual style as a precise art direction brief.
+This becomes the single source of truth for ALL assets — CSS colours, UI panels, backgrounds, and sprites.
+
+Return ONLY valid JSON, no markdown:
+{
+  "art_style": "<concise image-generation phrase: rendering technique + line style + palette descriptor, e.g. 'glossy 3D cartoon, bold outlines, vibrant saturated palette'>",
+  "hex_palette": ["#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB"],
+  "rendering": "<specific rendering description, e.g. 'glossy 3D renders with soft specular highlights and subtle drop shadows'>",
+  "mood": "<lighting and atmosphere, e.g. 'warm golden ambient light, high saturation, slight vignette'>",
+  "negative_terms": "<what to avoid in all assets, e.g. 'no photorealism, no thin strokes, no desaturated colours, no baked-in text'>",
+  "css_primary": "#RRGGBB",
+  "css_accent": "#RRGGBB",
+  "css_text": "#RRGGBB"
+}"""
 
 PASS1 = """\
 You are a game developer restructuring an HTML game into a clean 3-screen brandable template.
@@ -146,6 +172,9 @@ Add a pause overlay INSIDE .app-container as a sibling of the screen divs:
 ━━━ SCREEN 3 — Game Over Screen ━━━
 Give its outer div: id="screen-gameover" class="screen"
 Must contain: final score/result display + a PLAY AGAIN button + a HOME button that returns to screen-home.
+The PLAY AGAIN button MUST be exactly:
+  <button id="btn-playagain"><img src="assets/images/btn_playagain.png" alt="PLAY AGAIN"></button>
+Wire btn-playagain to call the same JS function that restarts the game after a game over.
 If one exists, reshape it. If not, create a minimal one.
 
 ━━━ SHARED LAYOUT ━━━
@@ -167,10 +196,7 @@ Add this to the CSS (alongside existing styles — do not remove anything):
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    background-image: url('assets/images/background_home.png');
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
+    background: #111;
     padding: max(env(safe-area-inset-top, 0px), 0px)
              max(env(safe-area-inset-right, 0px), 0px)
              max(env(safe-area-inset-bottom, 0px), 0px)
@@ -196,6 +222,9 @@ Add this to the CSS (alongside existing styles — do not remove anything):
 
 ━━━ RULES ━━━
 - Remove: debug panels, settings, help screens, share buttons, tutorial overlays
+- Remove any pre-existing text title element on the title screen (h1, h2, .title, #title, any element
+  whose sole content is the game name as text) — the <img class="game-title"> replaces it entirely.
+  Never leave both a text heading and the image title on screen-home simultaneously.
 - LEVEL-BASED GAMES — CRITICAL: if the game has a level system (a LEVELS/levelConfigs array,
   a function that takes a level index to start a specific puzzle, difficulty tables), you MUST:
   1. Preserve ALL level data arrays and configs in the JS — never delete them
@@ -249,7 +278,11 @@ solvability. A plain Fisher-Yates shuffle does NOT guarantee a solvable state.
 
 HOME + PAUSE CONTROLS — wire up the injected buttons:
   Add `let paused = false;` near the top of the script (with other state variables).
-  - #btn-home-game and #btn-pause-game: set paused = true; add class "active" to #pause-overlay
+  - #btn-pause-game ONLY: set paused = true; add class "active" to #pause-overlay
+  - #btn-home-game: MUST call showScreen('home') and stop the game loop directly — do NOT show
+    the pause overlay. Stop loop: rAF games → cancelAnimationFrame; interval games → clearInterval.
+    Also set paused = false and remove "active" from #pause-overlay if it was open.
+    NEVER wire #btn-home-game to the same handler as #btn-pause-game.
   - #btn-resume-game: set paused = false; remove class "active" from #pause-overlay; resume loop:
       canvas/rAF games → requestAnimationFrame(gameLoop)
       setInterval games → restart the interval
@@ -260,6 +293,24 @@ HOME + PAUSE CONTROLS — wire up the injected buttons:
     keyboard handlers, pointerdown/up/move handlers, touch handlers, click handlers on game elements.
     This prevents moves/clicks registering while the pause overlay is visible.
   Add null guards on all getElementById calls.
+
+PLAY AGAIN / RESTART — the handler wired to #btn-playagain (and any restart button on the
+  game-over screen) MUST fully reset ALL mutable game state before starting a new game:
+  score, lives, coins, timer, moves, level, streak, and any other game-specific counters.
+  Do NOT just call showScreen('game') — reinitialize state first, then start fresh.
+
+BEST SCORE TRACKING — if the game tracks a best/high score:
+  - On page load, read from localStorage: best = parseInt(localStorage.getItem('best') || '0', 10)
+  - Save prevBest = best immediately before each game starts (before any score is earned)
+  - Show "New Best Score!" only when score > prevBest (never when score >= best, because
+    best may already equal score due to real-time updates during gameplay)
+  - Whenever best is updated: localStorage.setItem('best', best)
+  - Display the persisted best on both the title screen and game-over screen
+
+GAME OVER CONDITION — showScreen('gameover') must ONLY be called when a genuine terminal
+  condition is met (lives = 0, coins = 0, time expired, no moves left, puzzle complete, etc.).
+  It must NEVER be called unconditionally after every action (e.g., after every spin, every move).
+  If no clear game-over condition exists in the original code, add one appropriate to the genre.
 
 Leave anything ambiguous untouched. Do NOT change mechanics, difficulty, or intentional behaviour.
 Return ONLY the complete modified HTML. No explanation."""
@@ -302,8 +353,12 @@ must feel intentional and part of this specific theme — not generic.
     to the screen, display:block, margin:0 auto. Add hover scale transform only.
     Do NOT add background colour, box-shadow, glow, filter, or drop-shadow — the button image
     has its own visual design. The appearance reset is critical to remove browser default button styling.
-  - .btn-primary (other buttons, e.g. PLAY AGAIN): style as a normal themed button with background
-    colour, padding, border-radius — these are text buttons without image replacements.
+  - #btn-playagain: a <button> containing an <img> on the game-over screen. Style identically to
+    #btn-start: background:transparent, border:none, padding:0, cursor:pointer,
+    -webkit-appearance:none, appearance:none, max-width proportional to the screen, display:block,
+    margin:0 auto. Add hover scale transform only. Do NOT add background colour or shadows.
+  - .btn-secondary (HOME button on game-over, any subdued action button): style as a smaller text
+    button — themed colour, padding, border-radius, clearly less prominent than image buttons.
 
 ━━━ SCREEN-SPECIFIC RULES ━━━
   #screen-home (Title):
@@ -313,15 +368,24 @@ must feel intentional and part of this specific theme — not generic.
     - Do NOT override background or add decorative chrome that competes with gameplay
     - Use justify-content: space-evenly so content is distributed across the full screen height —
       never justify-content: flex-start which clusters everything at the top
-    - #btn-home-game and #btn-pause-game: style as small unobtrusive icon buttons wherever they
-      were placed. Image assets will replace the placeholder text in a later pass — style them
-      as transparent image containers (background:transparent, border:none, padding:0, cursor:pointer).
-      Do NOT create a separate #game-topbar if the game already has a HUD bar — integrate into it.
+    - #btn-home-game and #btn-pause-game: style as small unobtrusive icon buttons — sized to feel
+      like secondary controls, not primary game elements. They should be visually compact so
+      gameplay content dominates the screen. Size proportionally to the game's HUD bar — if the
+      HUD bar is dense with stats, keep them very small; if the HUD is spacious, slightly larger
+      is fine. Style as transparent image containers (background:transparent, border:none, padding:0,
+      cursor:pointer). Do NOT create a separate #game-topbar if the game already has a HUD bar
+      — integrate into it.
     - #pause-overlay: fullscreen overlay covering the app container (position:absolute, inset:0, z-index:9999).
       Hidden by default (display:none), shown with class "active" (display:flex).
-      Semi-transparent dark backdrop. #pause-card centred inside it.
+      Semi-transparent dark backdrop. #pause-card centred inside it via flex (align-items:center; justify-content:center).
+      IMPORTANT: #pause-card must NOT use position:absolute or position:fixed — it must be a plain
+      flex child so the overlay's align-items:center centers it correctly. Width: 85%; max-width: 360px.
+      Never leave max-width unconstrained.
       Style #pause-card to match the game theme — the background image will be wired later,
       so set background:transparent. Buttons inside should be clearly readable.
+      BUTTON CONSISTENCY: all 3 buttons (#btn-resume-game, #btn-restart-pause, #btn-home-pause)
+      must have consistent visual weight — don't make one a tiny icon while the others are
+      full-width styled buttons. Style them in a way that feels balanced for the game's theme.
     - In-game overlays (win popup, gameover popup) that appear OVER the play area must use
       position:absolute; inset:0 — never position:fixed (which escapes the app container)
     - When applying a background-image to a HUD/score panel, make direct child elements
@@ -332,20 +396,37 @@ must feel intentional and part of this specific theme — not generic.
     - All game containers (boards, grids, canvas wrappers, buttons) must be centred — use margin:0 auto or align-self:center; never leave them left-aligned
     - Game elements (canvas, board, grid) must use max-width/max-height or % units to scale down and fit within the viewport — never use fixed pixel sizes that exceed the screen
     - Every game container that holds game objects (board, play-area, grid, reel window, lane container, tile area) MUST have overflow:hidden in its CSS rule — this is mandatory to prevent game elements from rendering outside the container bounds
-    - HUD / score bar: compact, proportionally small relative to the screen height, semi-transparent overlay — never obscures play area
+    - HUD / score bar: should feel like a compact strip, leaving the large majority of the screen
+      for gameplay. If the game only needs a few stats, prefer a single horizontal row of small
+      badges over multiple stacked card panels. The HUD is a support element — not the focal point.
+    - CONSOLIDATION: if the game has multiple separate stat elements (a score row, then a separate
+      moves/combo row, then a secondary info strip), consolidate them. Multiple stacked strips
+      create a dominant HUD even when each strip is individually modest. Merge secondary stats
+      into the main score row when they fit, or arrange them as a compact inline group — avoid
+      giving each stat its own full-width row.
+    - PROPORTION: after all HUD elements are laid out, the game board/canvas/play area must be
+      the single tallest element visible during gameplay. If the combined height of all HUD strips
+      (topbar + score row + any secondary info bar) rivals the game board, the HUD is dominating
+      — consolidate rows and reduce padding until the play area clearly dominates the screen.
+    - Resource/progress bars (health, mana, energy, stamina, time): must be clearly visible at a
+      glance — thick enough to read, fill colour clearly contrasting with the track.
     - Enough padding around the game area so nothing touches screen edges
 
   #screen-gameover (Game Over):
-    - Centred, breathable — final score large and prominent
-    - Must have both a PLAY AGAIN button and a HOME button (returns to title screen)
-    - PLAY AGAIN / HOME use .btn-primary styling — themed background, padding, border-radius
+    - Centred, breathable — emotionally impactful (defeat or triumph moment for the player)
+    - Primary score/result: displayed at LARGE size — at least 2× the secondary stat font-size —
+      bold weight, theme accent colour, visually dominant
+    - Secondary stats compact and below the primary score — smaller font, subdued colour
+    - #btn-playagain: image container styled identically to #btn-start (see ASSET-AWARE RULES)
+    - HOME button (.btn-secondary): smaller, more subdued than #btn-playagain
+    - Space elements generously across the full screen height (justify-content: space-evenly)
 
 ━━━ VISUAL QUALITY ━━━
 - Import a Google Font that matches font_style from the theme (one font, 2 weights max)
 - The result must look like a professionally designed indie game, NOT an AI-generated template
 - Avoid: rainbow gradients, excessive glow effects, mismatched font weights, clashing colours
 - Transitions: subtle fade or slide between screens (opacity/transform, 0.25-0.35s ease)
-- .app-container already has background-image — do NOT add background-image to .screen or individual screen IDs
+- #screen-home, #screen-game, and #screen-gameover already have background-image set — PRESERVE these rules exactly as-is; do NOT remove or modify them. Do NOT add background-image to the base .screen class (without an ID)
 
 Keep all existing class names and IDs — only change visual properties."""
 
@@ -359,11 +440,15 @@ The game has:
   - Gameplay screen (id="screen-game"): shows background + game elements
   - Game Over screen (id="screen-gameover"): shows background + score + PLAY AGAIN
 
-REQUIRED — always include all nine:
+REQUIRED — always include all ten:
   1. background_home.png — full-screen atmospheric background for the TITLE screen.
      Rich and detailed — establishes the game world. Soft gradients or painterly illustration.
   2. background_game.png — background for the GAMEPLAY screen.
      Same palette as background_home.png but darker (30-40% darker) and more desaturated.
+     IMPORTANT: "darker" must not result in near-black — the background must still read as a
+     recognisable colour (muted blue, dark green, warm brown, etc.), never close to pure black.
+     If the home background is already moody or dark, reduce saturation and detail instead of
+     darkening further. The goal is reduced visual noise, not blackness.
      Minimal detail — must not compete with game elements. Subtle texture or gradient only.
   3. background_gameover.png — background for the GAME OVER screen.
      Dramatic darker variant of background_home.png. Slightly ominous or reflective mood.
@@ -378,6 +463,9 @@ REQUIRED — always include all nine:
      btn_home.png, two vertical bars, transparent background.
   9. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
      Styled to match the game theme. NO text, NO buttons baked in. Transparent background.
+  10. btn_playagain.png — PLAY AGAIN button for the game-over screen (#btn-playagain). Same
+      visual language as btn_play.png but reads "PLAY AGAIN" or shows a replay icon + text.
+      Pill/badge shape, transparent background. The primary CTA on game-over — bold and prominent.
 
 OPTIONAL UI CHROME — up to 4 additional panel/frame images. These make the game feel real.
   Generate decorative background images for the most impactful UI containers — prioritise:
@@ -431,6 +519,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
     {{"filename": "btn_home.png", "description": "...", "usage": "#btn-home-game", "transparent": true, "w": 80, "h": 80}},
     {{"filename": "btn_pause.png", "description": "...", "usage": "#btn-pause-game", "transparent": true, "w": 80, "h": 80}},
     {{"filename": "pause_card.png", "description": "...", "usage": "#pause-card", "transparent": true, "w": 360, "h": 440}},
+    {{"filename": "btn_playagain.png", "description": "...", "usage": "#btn-playagain on game-over screen", "transparent": true, "w": 320, "h": 100}},
     ...optional UI chrome and sprites...
   ],
   "audio": [
@@ -450,6 +539,7 @@ ALREADY WIRED BY TEMPLATE — do NOT add again:
   - assets/images/game_preview.png (referenced as <img class="game-preview"> on the title screen)
   - assets/images/title.png        (referenced as <img class="game-title"> on the title screen)
   - assets/images/btn_play.png     (referenced as <img> inside <button id="btn-start"> on the title screen)
+  - assets/images/btn_playagain.png (referenced as <img> inside <button id="btn-playagain"> on the game-over screen)
 
 WHAT YOU MUST WIRE — game-specific sprites and audio only:
   Asset manifest: {manifest}
@@ -477,50 +567,93 @@ RULES:
 UI CHROME PANELS (HUD frames, popups, score cards):
   For each panel/HUD image in the manifest, wire it as CSS on the target element in "usage".
 
+  EXACT SELECTOR RULE (strictly enforced):
+  The "usage" field is the EXACT CSS selector to target. Apply each image to ONLY that selector — never
+  to a parent, sibling, child, or semantically related element.
+  - If "usage" says "#pause-card" → apply ONLY to #pause-card. Never to .overlay, #pause-overlay,
+    or any other element, even if those elements visually surround or contain the card.
+  - If "usage" says ".score-row" → apply ONLY to .score-row. Never to .score-box or individual children.
+  - If "usage" says ".result-card" → apply ONLY to .result-card. Never to a parent wrapper or sibling.
+  - DANGER: Never apply a background-image to a shared class selector (a class used by more than one element
+    in the HTML) unless the usage field explicitly names that class. A background-image on a shared class
+    will corrupt ALL elements that share it. If the target needs a background, apply it via an ID selector
+    or a more specific selector that matches only the intended element.
+
   HUD / score bar panels (small bars at top of game screen):
   - background-image + background-size: 100% 100% + background-repeat: no-repeat
   - position: relative; box-sizing: border-box
-  - padding: 12% 15%  — generous padding keeps text well inside the visual frame border
+  - padding: enough that score text sits comfortably inside the panel frame — judge by the
+    image border thickness, not a fixed number
   - Remove conflicting background-color and border
   - Add min-height so the panel is always visible even if children are small
 
-  Popup panels (game-over card, win card, pause menu — anything that appears over gameplay):
+  Popup panels (game-over card, win card — anything INSIDE the game play area):
+  EXCEPTION: #pause-card is NOT a popup panel — it is a flex child inside #pause-overlay.
+  Do NOT apply these popup rules to #pause-card. See "TOPBAR + PAUSE CARD" section below.
   - Do NOT use position:absolute with inset:0 — that stretches the panel across the entire
-    parent container, distorting the image. Instead, create a centred popup:
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 85%; max-width: 420px;
+    parent container, distorting the image. Instead, create a centred absolutely-positioned popup:
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: sized to match the panel image's natural proportions — typically 70-90% of container;
       z-index: 100;
   - background-image + background-size: 100% 100% + background-repeat: no-repeat
-  - padding: 10% 12% — keeps all child content (title, score, buttons) inside the frame
+  - padding: enough that no content touches the panel image's frame edges — judge by eye
   - box-sizing: border-box; border-radius matching the panel image corners
-  - display: flex; flex-direction: column; align-items: center; gap: 0.8rem
+  - display: flex; flex-direction: column; align-items: center; gap appropriate for the theme
   - Remove conflicting background-color and border
   - If the popup was previously an overlay with inset:0, move it OUT of the game container
-    and wire it as a fixed-position element instead
+    and wire it as an absolutely-positioned element instead
 
   Result / stats cards (on game-over screen):
   - background-image + background-size: 100% 100% + background-repeat: no-repeat
-  - padding: 8% 10% — keeps rows inside the visual frame
-  - width: 85%; max-width: 400px; box-sizing: border-box
+  - padding: enough that rows sit inside the frame — judge by the panel image's border
+  - width: sized to match the panel image's natural proportions; box-sizing: border-box
   - Remove conflicting background-color and border
 
   ALL panel types:
   - Keep ALL child elements (text, scores, buttons) fully visible on top — never hide them
   - Ensure enough padding that no text touches the panel edges
+  - HEIGHT: always use height: auto so the card's height is driven by its content + padding.
+    Do NOT set an explicit height based on the panel image's pixel dimensions (e.g. do NOT
+    write height: 480px just because the panel PNG is 480px tall). background-size: 100% 100%
+    will stretch the panel image to cover whatever height the content requires. Setting an
+    explicit height that is larger than the content creates a large empty white/blank area.
   - CRITICAL: when applying a background-image panel to a container, remove background-color
     and background from ALL direct children that would cover the panel image — children must
     be transparent so the panel shows through
   - Use filter:drop-shadow(...) instead of box-shadow on any element with a panel background-image
     so the shadow follows the image shape rather than the element's bounding rectangle
-  - In-game overlays (win message, gameover popup inside the game play area) must use
-    position:absolute; inset:0 — NOT position:fixed, which escapes the app container on
-    wide-viewport layouts and breaks multi-game-per-page embedding
+  - In-game overlays (win message, gameover popup inside the game play area): NEVER use
+    position:fixed — this escapes the app container on wide-viewport layouts. Use
+    position:absolute instead. If the overlay is a full-screen dimming backdrop (inset:0
+    with semi-transparent background, no panel image), use inset:0. If the manifest provides
+    a background-image for this element (meaning it is a styled popup card), treat it as a
+    Popup panel — position it as a centred card (top:50%;left:50%;transform:translate(-50%,-50%);
+    width sized to the image proportions) and apply the background-image as specified above.
+    Do NOT skip applying the background-image just because the element was previously full-screen.
 
 TOPBAR + PAUSE CARD:
   - btn_home.png → put <img src="assets/images/btn_home.png"> inside #btn-home-game, remove text
   - btn_pause.png → put <img src="assets/images/btn_pause.png"> inside #btn-pause-game, remove text
+  - #btn-home-pause (inside the pause card): do NOT replace its text with an image — keep it
+    as a styled text button so it matches the visual weight of #btn-resume-game and
+    #btn-restart-pause. The pause card buttons must all be full-width, same size.
   - pause_card.png → apply as background-image on #pause-card, background-size: 100% 100%,
     keep all child elements (title, buttons) visible on top, remove conflicting background-color
+  - #pause-overlay (the dark backdrop behind #pause-card): must use a semi-transparent
+    background — e.g. rgba(0,0,0,0.55). NEVER opaque black or any solid colour. The game
+    world must remain dimly visible behind the pause menu. If #pause-overlay currently has
+    an opaque background, change it to rgba(0,0,0,0.55).
+  - #pause-overlay positioning: use `position: absolute; inset: 0` so it covers exactly the
+    app container (the game box). NEVER use position:fixed — that makes the overlay span the
+    full desktop viewport, causing the card's percentage width to become enormous.
+  - #pause-card must be a plain flex child (position: relative or static, NOT absolute/fixed).
+    The overlay's `display: flex; align-items: center; justify-content: center` centers it.
+    Set width: 85%; max-width: 360px on #pause-card. Never leave max-width unconstrained.
+  - Pause menu buttons (#btn-resume-game, #btn-restart-pause, #btn-home-pause): apply a
+    background-color from the theme palette (primary or secondary colour). They must look
+    like the game's own buttons, not browser-default grey. Add border-radius, font-weight:bold,
+    and a contrasting text colour. All three buttons must be the same size, full-width within
+    the card. Never leave these buttons unstyled.
 
 ALIGNMENT:
   - All wired sprites must appear visually centred on their game object — never offset or clipped
@@ -538,7 +671,7 @@ PASS5 = """\
 You are a QA engineer doing a final playability pass on a fully assembled HTML game.
 The game has 3 screens: screen-home (title), screen-game (gameplay), screen-gameover (game over).
 
-Fix ONLY the following classes of bugs — do not change visuals, game logic, or asset references:
+Fix the following classes of bugs and visual issues. Do not change game logic or asset filenames/paths:
 
 1. SCREEN ROUTING CORRECTNESS
    a) On load — static HTML: ensure the screen-home div has class="screen active" in the HTML
@@ -617,7 +750,124 @@ Fix ONLY the following classes of bugs — do not change visuals, game logic, or
    low-latency response on both mobile and desktop. The only exception is `<a>` links.
    This applies to all buttons: Play Again, Restart, Home, Next Level, etc.
 
+9. VISUAL LAYOUT AUDIT — self-critique each screen and fix what looks wrong.
+   For each screen below, ask yourself: "Does this look like a real polished mobile game, or like
+   an AI-generated template?" Then fix the CSS and HTML to close the gap. You may edit <style>
+   blocks and tweak element structure (class names, wrapper divs, inline styles) — but do NOT
+   change game logic, asset filenames, or element IDs.
+
+   TITLE SCREEN (#screen-home):
+   - Is the title image visually dominant (largest element)? If it is tiny or same size as
+     other elements, increase its max-width to 70–80% of the container.
+   - Is the preview image clearly a "gameplay preview"? Should be ~35–45% container width.
+   - Is the PLAY button obviously the primary CTA? Should be larger than secondary elements.
+   - Are the three elements spread generously across the full screen height? If they cluster
+     at the top or center, add justify-content: space-evenly to #screen-home.
+   - Is there any leftover raw text (game name as plain <h1>/<h2>, or a small text badge/pill
+     element) alongside the title image? If a text element shows the game's name and the title
+     image already shows it, the text element is redundant — hide it with display:none.
+   - Is there any plain white or solid-coloured rectangular element that has no content and
+     no background-image? This is an orphaned container from the original HTML. Make it
+     background: transparent so it doesn't appear as a white block over the background.
+
+   GAME SCREEN (#screen-game):
+   - Is the score/HUD visible and legible without squinting? If font-size is under 0.9em or
+     the score element has no background panel, increase its visual prominence.
+   - Count every strip above the game board: topbar row, score/stat row, any secondary info
+     row (moves counter, combo bar, mana strip). If their combined height rivals or exceeds
+     the game board/canvas height, the HUD is dominating — this must be fixed. Merge secondary
+     rows into the main score row, reduce padding on existing rows, or remove redundant stat
+     displays. The game board must be the single tallest element on the screen.
+   - Do #btn-home-game and #btn-pause-game feel like small secondary controls, or do they
+     visually compete with the game content? If they look dominant, reduce them.
+   - Are resource/progress bars (health, mana, energy, stamina) clearly readable — thick enough
+     to communicate state at a glance? A hairline bar is not useful to a player.
+   - Does the game board/grid/canvas fill a natural proportion of the screen (~60–75% height)?
+     If it is tiny (under 40%) or overflows its container, fix the sizing.
+   - Does anything overflow its container? Add overflow:hidden where needed.
+   - Are there any orphaned visual artifacts — elements with visible rounded-corner borders,
+     faint background shapes, or placeholder ovals/capsules/rectangles that have no game
+     content and no interactive purpose? These are often leftover from the original HTML
+     before it was restructured. Hide them with display:none. Common locations: below the
+     game board, beside the topbar, or as empty floats around the play area.
+   - Pause overlay: `#pause-overlay` must use `position: absolute; inset: 0` (NOT fixed — fixed
+     makes the overlay cover the full desktop viewport and causes percentage widths on the pause
+     card to become enormous). Ensure `#pause-overlay` has `display: flex; align-items: center;
+     justify-content: center` when active. `#pause-card` must be a plain flex child (NOT
+     `position: absolute` or `position: fixed`) with `width: 85%; max-width: 360px`. If the card
+     currently has `position: absolute; top: 50%; left: 50%`, remove that and let the flex parent
+     center it. If `max-width` is missing or unconstrained (e.g. `max-width: 90%`), add
+     `max-width: 360px`.
+   - HUD consolidation: If there are more than two horizontal rows of HUD elements stacked above
+     the game board, and their combined height consumes more than ~25% of the screen, consolidate
+     them. Any plain text-only row (no background-image panel) that contains only counters or
+     action labels should be merged into the adjacent HUD row rather than occupying its own strip.
+     Navigation buttons (home, pause) belong in the topbar row, not in a separate row.
+     EXCEPTION: do NOT merge or remove any row that has a `background-image` applied to it —
+     that image was intentionally wired in a previous pass and must stay on its target element.
+   - Play area fills available height: The container directly holding game elements MUST use
+     `flex: 1; min-height: 0`. Additionally, if a DOM game board/grid has a fixed pixel CSS size
+     that leaves large empty margins above and below it, replace the fixed CSS dimensions with
+     container-relative sizing (percentage widths, `aspect-ratio`, or JS that reads
+     `container.offsetWidth`/`offsetHeight` after the screen is shown via requestAnimationFrame).
+     EXCEPTION: do NOT modify `<canvas>` element `width`/`height` attributes or the JS that sets
+     them — canvas pixel dimensions define the coordinate system and must not be changed via CSS.
+   - Game mechanic container backgrounds: Repeating game element containers (reels, grid cells,
+     sortable slots, etc.) must not have a white or near-white background when the game theme is
+     dark or richly coloured. A white fill breaks immersion against a dark background. Replace
+     with a semi-transparent or theme-appropriate dark fill.
+
+   GAME-OVER SCREEN (#screen-gameover):
+   - Is the primary score/result displayed at LARGE size — clearly bigger than secondary stats?
+     If all stats are the same font-size, make the primary score at least 2× larger.
+   - Does the screen feel emotionally impactful (celebratory win or dramatic loss), or does
+     it look like a plain data table? If bland: bold the palette, add the theme accent colour
+     to the primary score, increase spacing.
+   - Is there visible, prominent empty space between the score area and the buttons?
+     If buttons are crammed directly under the stats, add margin or padding.
+   - Are there any plain unstyled text buttons that should look like the theme? Style them.
+
+   GLOBAL:
+   - Any element with a `background-image` panel that has visible browser-default background-color
+     or border bleeding through: remove that background-color/border.
+   - Any button that still shows default browser button styling (grey background, system font,
+     visible border): apply the game's theme styling to it.
+   - Text that is unreadable against its background: add text-shadow or change colour.
+
 Return ONLY the complete modified HTML. No explanation."""
+
+PASS_VISUAL_AUDIT = """\
+You are a visual QA engineer reviewing a mobile HTML game rendered in a real browser.
+Screenshots of the 3 game screens are shown above (labelled HOME, GAME, GAMEOVER).
+If a COVER ART image is included, use it as the quality reference — the game's palette,
+rendering style, and visual language should match it.
+
+For each screen, identify ONLY concrete, fixable visual defects — things that look broken,
+invisible, misaligned, clipped, or obviously wrong to a player.
+Be specific and actionable (name the element and the problem).
+
+Good findings:
+- "Score text is white on white panel — invisible"
+- "Pause card is clipped at the bottom — needs overflow visible or smaller max-height"
+- "Game board occupies only 20% of the screen height — needs flex:1 to fill available space"
+- "Gameover screen shows no score — result element is empty"
+- "Title image is tiny (< 30% width) — needs larger max-width"
+- "Large empty white rectangle below game board — orphaned container, set display:none"
+- "Button text is black on a dark background — poor contrast"
+
+NOT useful — skip these:
+- "Looks generic" / "Could be more polished" / "Colours not matching"
+- Any issue with a <canvas> element showing a solid background fill — that is a JS-side fix
+  handled by a later pass, not a CSS issue. Do NOT report canvas background colour as a defect.
+
+Return ONLY valid JSON, no markdown:
+{
+  "home": ["<specific issue>", ...],
+  "game": ["<specific issue>", ...],
+  "gameover": ["<specific issue>", ...],
+  "overall": ["<cross-screen CSS issue>", ...]
+}
+Return empty arrays for screens that look correct."""
 
 # ─── CSS extraction helpers (for pass 3) ─────────────────────────────────────
 STYLE_RE = re.compile(r'(<style[^>]*>)(.*?)(</style>)', re.DOTALL | re.IGNORECASE)
@@ -770,6 +1020,34 @@ def call_llm_vision(system: str, text: str, image_b64: str, label: str,
         print(f"    ✗  {label}: {e}")
         return None
 
+def call_llm_vision_multi(system: str, text: str, images: list,
+                           label: str, max_tokens: int = 2048) -> str | None:
+    """Call LLM with multiple labelled images. images: list of (label_str, base64_png) tuples."""
+    if not images:
+        return None
+    try:
+        content = []
+        for img_label, img_b64 in images:
+            if not img_b64:
+                continue
+            content.append({"type": "text", "text": img_label})
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}})
+        if not content:
+            return None
+        content.append({"type": "text", "text": f"{system}\n\n{text}"})
+        res = client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": content}]
+        )
+        if res.choices[0].finish_reason == "length":
+            print(f"    ⚠  {label}: truncated")
+            return None
+        return _strip_fences(res.choices[0].message.content)
+    except Exception as e:
+        print(f"    ✗  {label}: {e}")
+        return None
+
 # ─── LLM helper ───────────────────────────────────────────────────────────────
 def _strip_fences(text: str) -> str:
     """Remove markdown code fences (```html ... ``` or ``` ... ```) from LLM output."""
@@ -850,9 +1128,9 @@ def fix_css_issues(html: str) -> str:
             css, flags=re.DOTALL
         )
 
-    # 7. Fix overlay layers (#tiles, #tile-layer, #pieces-layer, etc.) that must overlap #cells
-    #    PASS3 often assigns position:relative to both layers, stacking them vertically.
-    #    Replace position:relative on any *-layer or #tiles selector with absolute overlay.
+    # 7b. Fix overlay layers (#tiles, #tile-layer, #pieces-layer, etc.) that must overlap #cells
+    #     PASS3 often assigns position:relative to both layers, stacking them vertically.
+    #     Replace position:relative on any *-layer or #tiles selector with absolute overlay.
     for overlay_sel in [r'#tiles\b', r'#tile-layer\b', r'#pieces-layer\b', r'#overlay\b', r'#animations\b']:
         css = re.sub(
             rf'({overlay_sel}\s*\{{[^}}]*?)position\s*:\s*relative\s*;',
@@ -878,10 +1156,38 @@ def fix_css_issues(html: str) -> str:
             r'\1', css, flags=re.DOTALL
         )
 
-    # 9. Fix #pause-overlay: must be position:absolute (not fixed) so it stays within .app-container
+    # 9b. Fix #pause-overlay: must be position:absolute (not fixed) so it stays within .app-container.
+    #     position:fixed makes percentage widths on #pause-card calculate against the full viewport.
     css = re.sub(
         r'(#pause-overlay\s*\{[^}]*?)position\s*:\s*fixed\s*;',
         r'\1position: absolute;',
+        css, flags=re.DOTALL
+    )
+
+    # 9c. Fix #pause-card: remove position:absolute/fixed so it centers via flex parent.
+    #     LLMs sometimes add `position:absolute; top:50%; left:50%; transform:translate(-50%,-50%)`
+    #     which takes the card OUT of flex flow, making the overlay's align-items:center useless.
+    css = re.sub(
+        r'(#pause-card\s*\{[^}]*?)position\s*:\s*(?:absolute|fixed)\s*;',
+        r'\1position: relative;',
+        css, flags=re.DOTALL
+    )
+    # Also strip top/left/transform centering that only made sense when position:absolute
+    css = re.sub(
+        r'(#pause-card\s*\{[^}]*?)top\s*:\s*50%\s*;',
+        r'\1',
+        css, flags=re.DOTALL
+    )
+    css = re.sub(
+        r'(#pause-card\s*\{[^}]*?)left\s*:\s*50%\s*;',
+        r'\1',
+        css, flags=re.DOTALL
+    )
+    # Match any transform: containing translate (handles compound values, no-space variants,
+    # translateX/Y shorthands) since the only reason these exist on #pause-card is absolute centering.
+    css = re.sub(
+        r'(#pause-card\s*\{[^}]*?)transform\s*:\s*[^;}]*translate[^;}]*;',
+        r'\1',
         css, flags=re.DOTALL
     )
 
@@ -897,7 +1203,7 @@ def fix_css_issues(html: str) -> str:
         clean_blocks.append(block)
     css = ''.join(clean_blocks)
 
-    # Always append structural guardrail last — only once (fix_css_issues runs after Pass3 and Pass4D)
+    # Always append structural guardrail last — only once (fix_css_issues runs after Pass3, Pass4D, and Pass5)
     if "structural guardrail" not in css:
         css += "\n/* ── structural guardrail ── */\n"
         css += "#screen-game { position: relative; overflow: hidden !important; }\n"
@@ -912,7 +1218,7 @@ def fix_css_issues(html: str) -> str:
 
 _PASS1_REQUIRED_IDS = [
     "screen-home", "screen-game", "screen-gameover",
-    "btn-start", "btn-home-game", "btn-pause-game", "pause-overlay",
+    "btn-start", "btn-playagain", "btn-home-game", "btn-pause-game", "pause-overlay",
 ]
 
 def validate_pass1(html: str) -> list[str]:
@@ -1078,8 +1384,20 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
         if style_lock:
             art = style_lock.get("art_style", "")
             neg = style_lock.get("negative_terms", "")
+            palette = style_lock.get("hex_palette", [])
+            rendering = style_lock.get("rendering", "")
+            mood = style_lock.get("mood", "")
+            if isinstance(neg, list):
+                neg = ", ".join(neg)
             if art:
-                desc = f"Art style: {art}. {desc}"
+                prefix = f"Art style: {art}."
+                if palette:
+                    prefix += f" Colour palette: {', '.join(palette[:5])}."
+                if rendering and rendering != art:
+                    prefix += f" {rendering}."
+                if mood:
+                    prefix += f" {mood}."
+                desc = f"{prefix} {desc}"
             if neg and art:
                 desc = f"{desc} {neg}."
         if genre_direction:
@@ -1091,15 +1409,27 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
             desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
         return desc, transparent
 
+    def _post_process(path: Path, target_w: int | None, target_h: int | None) -> None:
+        """Crop transparent padding then resize to manifest dimensions. Operates on saved file."""
+        try:
+            img = PILImage.open(path).convert("RGBA")
+            bbox = img.getbbox()
+            if bbox and bbox != (0, 0, img.width, img.height):
+                img = img.crop(bbox)
+            if target_w and target_h and (img.width != target_w or img.height != target_h):
+                img = img.resize((target_w, target_h), PILImage.LANCZOS)
+            img.save(path)
+        except Exception:
+            pass
+
     def _gen_one(img: dict) -> tuple[str, bool]:
         fname = img["filename"]
         out_path = img_dir / fname
+        target_w = img.get("w")
+        target_h = img.get("h")
         if out_path.exists():
-            try:
-                actual = PILImage.open(out_path)
-                img["w"], img["h"] = actual.size
-            except Exception:
-                pass
+            # Manifest w/h is source of truth — crop padding + resize cached file if needed
+            _post_process(out_path, target_w, target_h)
             return fname, True
         desc, transparent = _build_desc(img)
         ok = gen_image(desc, out_path, transparent=transparent)
@@ -1107,11 +1437,8 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
             time.sleep(2)
             ok = gen_image(desc, out_path, transparent=transparent)
         if ok and out_path.exists():
-            try:
-                actual = PILImage.open(out_path)
-                img["w"], img["h"] = actual.size
-            except Exception:
-                pass
+            # Crop transparent padding then resize to declared manifest dimensions
+            _post_process(out_path, target_w, target_h)
         return fname, ok
 
     failed = set()
@@ -1204,6 +1531,64 @@ def smoke_test(out_dir: Path) -> dict:
     }
 
 
+def screenshot_screens(out_dir: Path, html: str) -> dict:
+    """Render the game in headless Chromium and capture screenshots of all 3 screens.
+    Writes a temporary file so the screenshots reflect the current in-memory HTML.
+    Returns dict with keys: home_b64, game_b64, gameover_b64 (base64 PNG strings).
+    Missing keys mean that screen could not be captured."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {}
+
+    import base64
+    tmp_path = out_dir / "_screenshot_tmp.html"
+    tmp_path.write_text(html, encoding="utf-8")
+
+    result = {}
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.on("pageerror", lambda e: None)  # suppress errors during capture
+            page.goto(f"file://{tmp_path}", wait_until="domcontentloaded")
+            page.wait_for_timeout(800)
+
+            # Home screen
+            result["home_b64"] = base64.b64encode(page.screenshot()).decode()
+
+            # Game screen — click PLAY button
+            try:
+                page.click("#btn-start", timeout=3000)
+                page.wait_for_timeout(1500)
+                result["game_b64"] = base64.b64encode(page.screenshot()).decode()
+            except Exception:
+                pass
+
+            # Gameover screen — force-show it via JS (bypass needing to actually play)
+            try:
+                page.evaluate("""() => {
+                    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+                    const go = document.getElementById('screen-gameover');
+                    if (go) go.classList.add('active');
+                }""")
+                page.wait_for_timeout(500)
+                result["gameover_b64"] = base64.b64encode(page.screenshot()).decode()
+            except Exception:
+                pass
+
+            browser.close()
+    except Exception as e:
+        print(f"    ⚠  screenshot: {e}")
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
+    return result
+
+
 # ─── Single-game pipeline ─────────────────────────────────────────────────────
 def beautify(src_dir: Path) -> bool:
     name    = src_dir.name
@@ -1234,14 +1619,19 @@ def beautify(src_dir: Path) -> bool:
     if _old_pass4_done and not prog.get("pass4_assets"):
         prog["pass4_assets"] = True
         prog["pass4_wire"] = True
+        prog["pass4_manifest"] = True
         mf = out_dir / "assets" / "manifest.json"
         if mf.exists() and not prog.get("manifest"):
             prog["manifest"] = json.loads(mf.read_text())
         save_prog()
+    # Migrate pass4_assets (old meaning: manifest+images) → also mark pass4_manifest done
+    if prog.get("pass4_assets") and not prog.get("pass4_manifest"):
+        prog["pass4_manifest"] = True
+        save_prog()
 
     # Load from last completed pass
     def latest_html() -> str:
-        for fname in ("index_pass5.html", "index_pass4.html", "index_pass3.html", "index_pass2.html", "index_pass1.html", "index_original.html"):
+        for fname in ("index_pass5.html", "index_pass_va.html", "index_pass4.html", "index_pass3.html", "index_pass2.html", "index_pass1.html", "index_original.html"):
             f = out_dir / fname
             if f.exists():
                 return f.read_text(encoding="utf-8", errors="ignore")
@@ -1367,6 +1757,21 @@ def beautify(src_dir: Path) -> bool:
     elif (out_dir / "index_pass2.html").exists():
         html = (out_dir / "index_pass2.html").read_text(encoding="utf-8")
 
+    # ── Cover style extraction (once, before PASS3 — single source of truth) ──
+    cover_style = prog.get("cover_style")
+    if cover_b64 and not cover_style:
+        r = call_llm_vision(
+            COVER_EXTRACT,
+            "Extract the visual style from this cover image.",
+            cover_b64, "cover-extract", max_tokens=512
+        )
+        if r:
+            parsed = _extract_json_from_solve(r)
+            if parsed:
+                cover_style = parsed
+                prog["cover_style"] = cover_style
+                save_prog()
+
     # ── Pass 3: improve visuals (CSS-only to avoid truncation) ───────────────
     if not prog.get("pass3"):
         print("    → Pass 3: improve visuals")
@@ -1375,7 +1780,20 @@ def beautify(src_dir: Path) -> bool:
         content = f"=== HTML STRUCTURE (context only) ===\n{skeleton}\n\n=== CURRENT CSS ===\n{css}"
         prompt3 = PASS3.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
         if cover_b64:
-            cover_note = "\nThe cover image above shows this game's official visual style. Use it as your PRIMARY reference for colours, typography mood, and overall aesthetic. The theme JSON is a guide — the cover image overrides it where they differ."
+            if cover_style:
+                palette_str = ", ".join(cover_style.get("hex_palette", []))
+                cover_note = (
+                    "\n\nCOVER STYLE BRIEF (extracted from cover image — apply these values directly in CSS):\n"
+                    f"  CSS primary background: {cover_style.get('css_primary', '')}\n"
+                    f"  CSS accent/action colour: {cover_style.get('css_accent', '')}\n"
+                    f"  CSS text colour: {cover_style.get('css_text', '')}\n"
+                    f"  Full palette: {palette_str}\n"
+                    f"  Rendering: {cover_style.get('rendering', '')}\n"
+                    f"  Mood/lighting: {cover_style.get('mood', '')}\n"
+                    "\nThe cover image above confirms this brief. Use the hex values directly; do not invent new colours."
+                )
+            else:
+                cover_note = "\nThe cover image above shows this game's official visual style. Use it as your PRIMARY reference for colours, typography mood, and overall aesthetic. The theme JSON is a guide — the cover image overrides it where they differ."
             r = call_llm_vision(prompt3 + cover_note, content, cover_b64, "pass3", max_tokens=8192)
         else:
             r = call_llm(prompt3, content, "pass3", max_tokens=8192)
@@ -1394,37 +1812,66 @@ def beautify(src_dir: Path) -> bool:
     style_lock = prog.get("style_lock")
     if not style_lock and prog.get("pass3"):
         print("    → Pass 0.5: generate style lock (Trinity Protocol)")
-        css_sample, _ = extract_css(html)
-        genre = game_meta.get("genre", "misc") if game_meta else "misc"
-        style_problem = (
-            f"Game genre: {genre}\n"
-            f"Approved theme: {theme_json}\n\n"
-            f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
-            f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
-        )
-        r = tp_analyze(
-            problem=style_problem,
-            fallback_system=STYLE_LOCK,
-            fallback_html=f"Genre: {genre}\nTheme: {theme_json}",
-            label="style-lock",
-            max_tokens=512,
-        )
-        if r:
-            parsed = _extract_json_from_solve(r)
-            if parsed:
-                style_lock = parsed
-                prog["style_lock"] = style_lock
-                print(f"    ○ style: {style_lock.get('art_style', '?')}")
-        save_prog()
+        if cover_style:
+            # Cover extraction already ran — build style_lock from it directly, no extra LLM call
+            style_lock = {
+                "art_style": cover_style.get("art_style", ""),
+                "hex_palette": cover_style.get("hex_palette", []),
+                "rendering": cover_style.get("rendering", ""),
+                "mood": cover_style.get("mood", ""),
+                "line_weight": cover_style.get("rendering", ""),
+                "shadow_style": cover_style.get("mood", ""),
+                "background_treatment": cover_style.get("mood", ""),
+                "icon_shape": "",
+                "negative_terms": cover_style.get("negative_terms", ""),
+            }
+            prog["style_lock"] = style_lock
+            print(f"    ○ style: {style_lock.get('art_style', '?')} (from cover extract)")
+            save_prog()
+        else:
+            css_sample, _ = extract_css(html)
+            genre = game_meta.get("genre", "misc") if game_meta else "misc"
+            style_problem = (
+                f"Game genre: {genre}\n"
+                f"Approved theme: {theme_json}\n\n"
+                f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
+                f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
+            )
+            r = tp_analyze(
+                problem=style_problem,
+                fallback_system=STYLE_LOCK,
+                fallback_html=f"Genre: {genre}\nTheme: {theme_json}",
+                label="style-lock",
+                max_tokens=512,
+            )
+            if r:
+                parsed = _extract_json_from_solve(r)
+                if parsed:
+                    style_lock = parsed
+                    prog["style_lock"] = style_lock
+                    print(f"    ○ style: {style_lock.get('art_style', '?')}")
+            save_prog()
 
-    # ── Pass 4a-c: determine + generate assets ───────────────────────────────
+    # ── Pass 4a: determine asset manifest ────────────────────────────────────
     manifest = prog.get("manifest")
-    if not prog.get("pass4_assets"):
+    if not prog.get("pass4_manifest"):
         print("    → Pass 4a: determine assets")
         prompt4a = PASS4A.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width, screen_h=screen_height)
         p4a_input = html_skeleton(html)
         if cover_b64:
-            cover_note = "\nThe cover image above is this game's official artwork. All asset descriptions must match its visual style — colours, illustration style, and mood. game_preview.png should closely match the cover image composition."
+            if cover_style:
+                palette_str = ", ".join(cover_style.get("hex_palette", []))
+                cover_note = (
+                    "\n\nCOVER STYLE BRIEF (use for ALL asset descriptions):\n"
+                    f"  Art style: {cover_style.get('art_style', '')}\n"
+                    f"  Rendering: {cover_style.get('rendering', '')}\n"
+                    f"  Mood: {cover_style.get('mood', '')}\n"
+                    f"  Palette: {palette_str}\n"
+                    f"  Avoid: {cover_style.get('negative_terms', '')}\n"
+                    "\ngame_preview.png must closely match the cover image composition and style."
+                )
+            else:
+                cover_note = "\nThe cover image above is this game's official artwork. All asset descriptions must match its visual style — colours, illustration style, and mood. game_preview.png should closely match the cover image composition."
             manifest_raw = call_llm_vision(prompt4a + cover_note, p4a_input, cover_b64, "pass4a", max_tokens=4096)
         else:
             manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=4096)
@@ -1433,52 +1880,22 @@ def beautify(src_dir: Path) -> bool:
             manifest = _extract_json_from_solve(manifest_raw)
             if manifest is None:
                 print(f"    ⚠  pass4a: could not parse manifest")
-
         if manifest:
-            img_dir = out_dir / "assets" / "images"
-            aud_dir = out_dir / "assets" / "audio"
-            img_dir.mkdir(parents=True, exist_ok=True)
-            aud_dir.mkdir(parents=True, exist_ok=True)
-
-            genre_direction = config.get("genre_art_direction", {}).get(
-                game_meta.get("genre", "misc") if game_meta else "misc", ""
-            )
-            print(f"    → Pass 4b: generating {len(manifest.get('images', []))} images (parallel, max 4 workers)")
-            failed_images = generate_images_parallel(
-                manifest.get("images", []),
-                img_dir,
-                max_workers=4,
-                style_lock=style_lock,
-                genre_direction=genre_direction,
-            )
-
-            if failed_images:
-                manifest["images"] = [i for i in manifest["images"] if i["filename"] not in failed_images]
-                print(f"    ⚠  skipping {len(failed_images)} failed image(s) in wiring: {failed_images}")
-
-            for aud in manifest.get("audio", []):
-                out_path = aud_dir / aud["filename"]
-                if out_path.exists():
-                    print(f"    → Pass 4c: audio  {aud['filename']} (cached)")
-                    continue
-                print(f"    → Pass 4c: audio  {aud['filename']}")
-                gen_audio(aud["description"], aud.get("duration_seconds", 1.0), out_path)
-                time.sleep(0.5)
-
+            (out_dir / "assets" / "images").mkdir(parents=True, exist_ok=True)
+            (out_dir / "assets" / "audio").mkdir(parents=True, exist_ok=True)
             (out_dir / "assets" / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False)
             )
             prog["manifest"] = manifest
-            prog["pass4_assets"] = True
+            prog["pass4_manifest"] = True
         else:
-            prog["pass4_assets_skipped"] = True
-
+            prog["pass4_manifest_skipped"] = True
         save_prog()
 
-    # Load manifest from progress if assets were already generated
+    # Manifest is now the single source of truth — load from progress, never mutate after this
     manifest = manifest or prog.get("manifest")
 
-    # ── Pass 4d: wire assets into HTML ────────────────────────────────────────
+    # ── Pass 4d: wire assets into HTML (before image generation) ─────────────
     if not prog.get("pass4_wire") and manifest:
         print("    → Pass 4d: wire assets into HTML")
         prompt = PASS4D.format(manifest=json.dumps(manifest, indent=2), aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
@@ -1490,6 +1907,102 @@ def beautify(src_dir: Path) -> bool:
         else:
             prog["pass4_wire_failed"] = True
         save_prog()
+    elif (out_dir / "index_pass4.html").exists():
+        html = (out_dir / "index_pass4.html").read_text(encoding="utf-8")
+
+    # ── Pass 4b-c: generate images and audio ─────────────────────────────────
+    if not prog.get("pass4_assets") and manifest:
+        img_dir = out_dir / "assets" / "images"
+        aud_dir = out_dir / "assets" / "audio"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        aud_dir.mkdir(parents=True, exist_ok=True)
+
+        genre_direction = config.get("genre_art_direction", {}).get(
+            game_meta.get("genre", "misc") if game_meta else "misc", ""
+        )
+        print(f"    → Pass 4b: generating {len(manifest.get('images', []))} images (parallel, max 4 workers)")
+        failed_images = generate_images_parallel(
+            manifest.get("images", []),
+            img_dir,
+            max_workers=4,
+            style_lock=style_lock,
+            genre_direction=genre_direction,
+        )
+        if failed_images:
+            print(f"    ⚠  {len(failed_images)} image(s) failed to generate: {failed_images}")
+
+        for aud in manifest.get("audio", []):
+            out_path = aud_dir / aud["filename"]
+            if out_path.exists():
+                print(f"    → Pass 4c: audio  {aud['filename']} (cached)")
+                continue
+            print(f"    → Pass 4c: audio  {aud['filename']}")
+            gen_audio(aud["description"], aud.get("duration_seconds", 1.0), out_path)
+            time.sleep(0.5)
+
+        prog["pass4_assets"] = True
+        save_prog()
+
+    # ── Pass 4.5: screenshot-based visual audit ───────────────────────────────
+    if not prog.get("pass_va"):
+        print("    → Pass 4.5: visual audit (screenshot)")
+        screenshots = screenshot_screens(out_dir, html)
+        if not screenshots:
+            print("    ○ visual audit skipped (Playwright unavailable)")
+            prog["pass_va"] = True
+            save_prog()
+        else:
+            # Build labelled image list: optional cover first, then 3 screens
+            images = []
+            if cover_b64:
+                images.append(("COVER ART (quality reference):", cover_b64))
+            for key, label in [("home_b64", "HOME SCREEN:"), ("game_b64", "GAME SCREEN:"), ("gameover_b64", "GAMEOVER SCREEN:")]:
+                if screenshots.get(key):
+                    images.append((label, screenshots[key]))
+            if len(images) < (2 if cover_b64 else 1):
+                print("    ○ visual audit: could not capture enough screens, skipping")
+                prog["pass_va"] = True
+                save_prog()
+            else:
+                skeleton = html_skeleton(html)
+                r = call_llm_vision_multi(PASS_VISUAL_AUDIT, skeleton, images, "visual-audit", max_tokens=1024)
+                issues = _extract_json_from_solve(r) if r else None
+                va_done = False
+                if issues and isinstance(issues, dict):
+                    all_issues = []
+                    for screen in ("home", "game", "gameover", "overall"):
+                        items = issues.get(screen, [])
+                        if items:
+                            all_issues.append(f"{screen.upper()} SCREEN:" if screen != "overall" else "OVERALL:")
+                            all_issues.extend(f"  - {i}" for i in items)
+                    if all_issues:
+                        issue_text = "\n".join(all_issues)
+                        print(f"    ⚠  visual audit found issues — applying fixes")
+                        fix_prompt = (
+                            f"VISUAL AUDIT: The game was rendered in a real browser and the following "
+                            f"visual defects were found:\n\n{issue_text}\n\n"
+                            f"Fix ALL of the above by editing only <style> blocks and element "
+                            f"class/inline-style attributes. Do NOT change game logic, asset "
+                            f"filenames, or element IDs. Return ONLY the complete fixed HTML."
+                        )
+                        r2 = call_llm(fix_prompt, html, "visual-audit-fix", max_tokens=65536)
+                        if r2:
+                            html = fix_css_issues(r2)
+                            (out_dir / "index_pass_va.html").write_text(html, encoding="utf-8")
+                            va_done = True
+                        else:
+                            print(f"    ⚠  visual audit fix LLM failed — will retry next run")
+                    else:
+                        print("    ✓ visual audit: no issues found")
+                        va_done = True
+                else:
+                    print("    ○ visual audit: could not parse issues response")
+                    va_done = True  # don't retry unparseable responses
+                if va_done:
+                    prog["pass_va"] = True
+                save_prog()
+    elif (out_dir / "index_pass_va.html").exists():
+        html = (out_dir / "index_pass_va.html").read_text(encoding="utf-8")
 
     # ── Pass 5: playability QA ────────────────────────────────────────────────
     if not prog.get("pass5"):
@@ -1508,12 +2021,14 @@ def beautify(src_dir: Path) -> bool:
         pass5_input = meta_note + html
         r = call_llm(PASS5, pass5_input, "pass5", max_tokens=65536)
         if r:
-            html = r
+            html = fix_css_issues(r)
             (out_dir / "index_pass5.html").write_text(html, encoding="utf-8")
             prog["pass5"] = True
         else:
             prog["pass5_failed"] = True
         save_prog()
+    elif (out_dir / "index_pass5.html").exists():
+        html = (out_dir / "index_pass5.html").read_text(encoding="utf-8")
 
     # ── Pass 6: Playwright smoke test + error-driven retry ────────────────────
     smoke_result = prog.get("smoke_result")
