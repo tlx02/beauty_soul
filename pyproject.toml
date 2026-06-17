@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beauty_soul"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0",
+    "Pillow>=10.0",
+    "requests>=2.31",
+    # playwright>=1.40 required for visual audit (Pass 4.5) and smoke test (Pass 6).
+    # Install separately: pip install playwright && python -m playwright install chromium
+    # Both passes degrade gracefully when Playwright is unavailable (logged as skipped).
+    # rembg is NOT required — background removal was removed; only transparent-padding
+    # crop (Pillow only) is used. See beauty_soul/beautify_games.py _crop_transparent_padding.
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+beauty-soul = "cli:main"
+
+[tool.setuptools.packages.find]
+include = ["beauty_soul*"]
