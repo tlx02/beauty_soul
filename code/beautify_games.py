@@ -113,21 +113,6 @@ Return ONLY valid JSON:
   "negative_terms": "<e.g. 'no photorealism, no gradients, no lens flare, no text baked in'>"
 }"""
 
-COVER_EXTRACT = """\
-Analyse this game cover image and extract its visual style as a precise art direction brief.
-This becomes the single source of truth for ALL assets — CSS colours, UI panels, backgrounds, and sprites.
-
-Return ONLY valid JSON, no markdown:
-{
-  "art_style": "<concise image-generation phrase: rendering technique + line style + palette descriptor, e.g. 'glossy 3D cartoon, bold outlines, vibrant saturated palette'>",
-  "hex_palette": ["#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB"],
-  "rendering": "<specific rendering description, e.g. 'glossy 3D renders with soft specular highlights and subtle drop shadows'>",
-  "mood": "<lighting and atmosphere, e.g. 'warm golden ambient light, high saturation, slight vignette'>",
-  "negative_terms": "<what to avoid in all assets, e.g. 'no photorealism, no thin strokes, no desaturated colours, no baked-in text'>",
-  "css_primary": "#RRGGBB",
-  "css_accent": "#RRGGBB",
-  "css_text": "#RRGGBB"
-}"""
 
 PASS1 = """\
 You are a game developer restructuring an HTML game into a clean 3-screen brandable template.
@@ -331,6 +316,15 @@ All sizing inside screens should use relative units — not fixed pixels. Use %,
 Apply this theme consistently across all 3 screens. Every colour, font, and spacing choice
 must feel intentional and part of this specific theme — not generic.
 
+━━━ CSS QUALITY — avoid these AI-CSS tells ━━━
+- Gradients: maximum ONE gradient per element. Prefer solid fills — use gradients only when essential for depth
+- Box-shadow: maximum one shadow layer per element, subtle (e.g. 0 4px 12px rgba(0,0,0,0.3))
+- No stacked shadows, no inset + outer shadow combos, no neon glow effects
+- Buttons: solid fill + border-radius + one shadow is enough. No multi-stop gradients, no pseudo-3D effects
+- Typography: clean hierarchy — one font family, 2-3 size steps. No stacked text-shadow
+- Colour: use the approved palette directly. No inventing extra accent colours or tints
+The result should look intentionally designed, not algorithmically generated.
+
 ━━━ LAYOUT RULES (apply to all screens) ━━━
 - Every screen must use the full viewport height — spread content vertically across the screen with generous spacing, never cluster everything in the centre; content is horizontally centred
 - Max content width: {max_width}px, centred with margin: 0 auto — prevents content stretching on wide displays
@@ -463,7 +457,7 @@ REQUIRED — always include all ten:
      btn_home.png, two vertical bars, transparent background.
   9. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
      Styled to match the game theme. NO text, NO buttons baked in. Transparent background.
-     Must be perfectly front-facing and flat — no perspective tilt or 3D angle.
+     Flat 2D illustrated panel — no 3D depth, no beveling. Front-facing, edges parallel to image edges.
   10. btn_playagain.png — PLAY AGAIN button for the game-over screen (#btn-playagain). Same
       visual language as btn_play.png but reads "PLAY AGAIN" or shows a replay icon + text.
       Pill/badge shape, transparent background. The primary CTA on game-over — bold and prominent.
@@ -478,8 +472,11 @@ OPTIONAL UI CHROME — up to 4 additional panel/frame images. These make the gam
   - Pause menu panel: if the game has one
   - Any other prominent UI container that would benefit from a polished frame
   CRITICAL RULES for UI chrome:
-  - DECORATIVE FRAME ONLY — describe the shape, texture, colour. NO text, NO numbers, NO icons
-    baked into the image. Live data (score values, button labels) is rendered by HTML on top.
+  - DECORATIVE FRAME ONLY — describe the shape, colour, and subtle texture. NO text, NO numbers,
+    NO icons baked into the image. Live data is rendered by HTML on top.
+  - FLAT 2D DESIGN — describe panels as flat illustrated shapes with clean fills and at most a
+    soft 2D drop shadow. NO soft 3D depth, NO beveled or embossed surfaces, NO photorealistic
+    materials, NO clay/plastic renders, NO CGI look. Think graphic design, not 3D rendering.
   - FRONT-FACING ONLY — every card/panel must be rendered perfectly flat and straight-on, as if
     the viewer is looking directly at it head-on. NO perspective tilt, NO 3D rotation, NO angle.
     The card edges must be parallel to the image edges. A tilted or angled card breaks layout.
@@ -862,7 +859,7 @@ Return ONLY the complete modified HTML. No explanation."""
 
 PASS_VISUAL_AUDIT = """\
 You are a strict visual QA engineer reviewing a mobile HTML game rendered in a real browser.
-Screenshots are labelled HOME, GAME, PAUSE, GAMEOVER. COVER ART (if shown) is the quality reference.
+Screenshots are labelled HOME, GAME, PAUSE, GAMEOVER.
 
 Be critical. Err on the side of reporting issues — a false positive is better than a miss.
 Report everything that looks wrong, broken, misaligned, or would frustrate a real player.
@@ -1008,21 +1005,6 @@ def game_context_for_pass0(html: str) -> str:
     struct = html_skeleton(html)
     return f"=== HTML STRUCTURE ===\n{struct}\n\n=== GAME LOGIC (truncated) ===\n{js}"
 
-# ─── Cover image helpers ──────────────────────────────────────────────────────
-COVER_DIRS = [
-    ROOT_DIR / "开头字母A-J游戏封面图",
-    ROOT_DIR / "开头字母K-Z游戏封面图",
-]
-
-def find_cover_image(name: str) -> Path | None:
-    for d in COVER_DIRS:
-        p = d / f"{name}.png"
-        if p.exists():
-            return p
-    return None
-
-def encode_image_b64(path: Path) -> str:
-    return base64.b64encode(path.read_bytes()).decode()
 
 def call_llm_vision(system: str, text: str, image_b64: str, label: str,
                     max_tokens: int = MAX_TOKENS) -> str | None:
@@ -1436,6 +1418,12 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
                 desc = f"{desc} Genre-specific style: {genre_direction}."
         if transparent:
             desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
+        # Universal anti-AI aesthetic constraint — applied to every generated image
+        desc += (
+            " Clean professional mobile game asset, 2D illustration style, intentional graphic design."
+            " No photorealistic 3D CGI rendering, no depth-of-field blur, no lens flare,"
+            " no over-rendered surfaces, no AI art aesthetic."
+        )
         return desc, transparent
 
     def _post_process(path: Path, target_w: int | None, target_h: int | None) -> None:
@@ -1661,11 +1649,6 @@ def beautify(src_dir: Path) -> bool:
     if not orig.exists():
         shutil.copy(src_dir / "index.html", orig)
 
-    # Cover image (optional — used as visual reference for Pass 3 + Pass 4A)
-    cover_path = find_cover_image(name)
-    cover_b64  = encode_image_b64(cover_path) if cover_path else None
-    print(f"    ○ cover: {'found ✓' if cover_b64 else 'not found (text-only mode)'}")
-
     # Progress tracking
     prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
     def save_prog(): prog_f.write_text(json.dumps(prog, indent=2))
@@ -1813,21 +1796,6 @@ def beautify(src_dir: Path) -> bool:
     elif (out_dir / "index_pass2.html").exists():
         html = (out_dir / "index_pass2.html").read_text(encoding="utf-8")
 
-    # ── Cover style extraction (once, before PASS3 — single source of truth) ──
-    cover_style = prog.get("cover_style")
-    if cover_b64 and not cover_style:
-        r = call_llm_vision(
-            COVER_EXTRACT,
-            "Extract the visual style from this cover image.",
-            cover_b64, "cover-extract", max_tokens=512
-        )
-        if r:
-            parsed = _extract_json_from_solve(r)
-            if parsed:
-                cover_style = parsed
-                prog["cover_style"] = cover_style
-                save_prog()
-
     # ── Pass 3: improve visuals (CSS-only to avoid truncation) ───────────────
     if not prog.get("pass3"):
         print("    → Pass 3: improve visuals")
@@ -1835,24 +1803,7 @@ def beautify(src_dir: Path) -> bool:
         skeleton = html_skeleton(html)
         content = f"=== HTML STRUCTURE (context only) ===\n{skeleton}\n\n=== CURRENT CSS ===\n{css}"
         prompt3 = PASS3.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
-        if cover_b64:
-            if cover_style:
-                palette_str = ", ".join(cover_style.get("hex_palette", []))
-                cover_note = (
-                    "\n\nCOVER STYLE BRIEF (extracted from cover image — apply these values directly in CSS):\n"
-                    f"  CSS primary background: {cover_style.get('css_primary', '')}\n"
-                    f"  CSS accent/action colour: {cover_style.get('css_accent', '')}\n"
-                    f"  CSS text colour: {cover_style.get('css_text', '')}\n"
-                    f"  Full palette: {palette_str}\n"
-                    f"  Rendering: {cover_style.get('rendering', '')}\n"
-                    f"  Mood/lighting: {cover_style.get('mood', '')}\n"
-                    "\nThe cover image above confirms this brief. Use the hex values directly; do not invent new colours."
-                )
-            else:
-                cover_note = "\nThe cover image above shows this game's official visual style. Use it as your PRIMARY reference for colours, typography mood, and overall aesthetic. The theme JSON is a guide — the cover image overrides it where they differ."
-            r = call_llm_vision(prompt3 + cover_note, content, cover_b64, "pass3", max_tokens=8192)
-        else:
-            r = call_llm(prompt3, content, "pass3", max_tokens=8192)
+        r = call_llm(prompt3, content, "pass3", max_tokens=8192)
         if r:
             html = inject_css(html_template, r)
             html = fix_css_issues(html)   # remove known bad CSS patterns
@@ -1867,46 +1818,30 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 0.5: style lock (shared art direction for all image generation) ──
     style_lock = prog.get("style_lock")
     if not style_lock and prog.get("pass3"):
-        print("    → Pass 0.5: generate style lock (Trinity Protocol)")
-        if cover_style:
-            # Cover extraction already ran — build style_lock from it directly, no extra LLM call
-            style_lock = {
-                "art_style": cover_style.get("art_style", ""),
-                "hex_palette": cover_style.get("hex_palette", []),
-                "rendering": cover_style.get("rendering", ""),
-                "mood": cover_style.get("mood", ""),
-                "line_weight": cover_style.get("rendering", ""),
-                "shadow_style": cover_style.get("mood", ""),
-                "background_treatment": cover_style.get("mood", ""),
-                "icon_shape": "",
-                "negative_terms": cover_style.get("negative_terms", ""),
-            }
-            prog["style_lock"] = style_lock
-            print(f"    ○ style: {style_lock.get('art_style', '?')} (from cover extract)")
-            save_prog()
-        else:
-            css_sample, _ = extract_css(html)
-            genre = game_meta.get("genre", "misc") if game_meta else "misc"
-            style_problem = (
-                f"Game genre: {genre}\n"
-                f"Approved theme: {theme_json}\n\n"
-                f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
-                f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
-            )
-            r = tp_analyze(
-                problem=style_problem,
-                fallback_system=STYLE_LOCK,
-                fallback_html=f"Genre: {genre}\nTheme: {theme_json}",
-                label="style-lock",
-                max_tokens=512,
-            )
-            if r:
-                parsed = _extract_json_from_solve(r)
-                if parsed:
-                    style_lock = parsed
-                    prog["style_lock"] = style_lock
-                    print(f"    ○ style: {style_lock.get('art_style', '?')}")
-            save_prog()
+        print("    → Pass 0.5: generate style lock")
+        css_sample, _ = extract_css(html)
+        genre = game_meta.get("genre", "misc") if game_meta else "misc"
+        style_problem = (
+            f"Game name: {name}\n"
+            f"Game genre: {genre}\n"
+            f"Approved theme: {theme_json}\n\n"
+            f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
+            f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
+        )
+        r = tp_analyze(
+            problem=style_problem,
+            fallback_system=STYLE_LOCK,
+            fallback_html=f"Game: {name}\nGenre: {genre}\nTheme: {theme_json}",
+            label="style-lock",
+            max_tokens=512,
+        )
+        if r:
+            parsed = _extract_json_from_solve(r)
+            if parsed:
+                style_lock = parsed
+                prog["style_lock"] = style_lock
+                print(f"    ○ style: {style_lock.get('art_style', '?')}")
+        save_prog()
 
     # ── Pass 4a: determine asset manifest ────────────────────────────────────
     manifest = prog.get("manifest")
@@ -1914,23 +1849,7 @@ def beautify(src_dir: Path) -> bool:
         print("    → Pass 4a: determine assets")
         prompt4a = PASS4A.format(theme_json=theme_json, aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width, screen_h=screen_height)
         p4a_input = html_skeleton(html)
-        if cover_b64:
-            if cover_style:
-                palette_str = ", ".join(cover_style.get("hex_palette", []))
-                cover_note = (
-                    "\n\nCOVER STYLE BRIEF (use for ALL asset descriptions):\n"
-                    f"  Art style: {cover_style.get('art_style', '')}\n"
-                    f"  Rendering: {cover_style.get('rendering', '')}\n"
-                    f"  Mood: {cover_style.get('mood', '')}\n"
-                    f"  Palette: {palette_str}\n"
-                    f"  Avoid: {cover_style.get('negative_terms', '')}\n"
-                    "\ngame_preview.png must closely match the cover image composition and style."
-                )
-            else:
-                cover_note = "\nThe cover image above is this game's official artwork. All asset descriptions must match its visual style — colours, illustration style, and mood. game_preview.png should closely match the cover image composition."
-            manifest_raw = call_llm_vision(prompt4a + cover_note, p4a_input, cover_b64, "pass4a", max_tokens=4096)
-        else:
-            manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=4096)
+        manifest_raw = call_llm(prompt4a, p4a_input, "pass4a", max_tokens=4096)
         manifest = None
         if manifest_raw:
             manifest = _extract_json_from_solve(manifest_raw)
@@ -2012,16 +1931,14 @@ def beautify(src_dir: Path) -> bool:
                 va_done = True
                 break
 
-            # Build labelled image list: optional cover first, then all captured screens
+            # Build labelled image list
             images = []
-            if cover_b64:
-                images.append(("COVER ART (quality reference):", cover_b64))
             for key, label in [("home_b64", "HOME SCREEN:"), ("game_b64", "GAME SCREEN:"),
                                 ("pause_b64", "PAUSE SCREEN:"), ("gameover_b64", "GAMEOVER SCREEN:")]:
                 if screenshots.get(key):
                     images.append((label, screenshots[key]))
 
-            if len(images) < (2 if cover_b64 else 1):
+            if len(images) < 1:
                 print(f"    ○ visual audit {iter_label}: insufficient screenshots, skipping")
                 va_done = True
                 break
