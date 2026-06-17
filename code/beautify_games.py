@@ -98,17 +98,17 @@ Return ONLY valid JSON — no markdown, no explanation:
 STYLE_LOCK = """\
 Generate a terse art direction brief for this game's image assets.
 This brief will be prepended verbatim to EVERY image generation prompt, so all assets must share one consistent visual language.
-
-If a cover image is shown above, use it as the PRIMARY reference — extract the exact rendering style,
-colour palette, line weight, and mood directly from what you see. The cover is authoritative.
-If no cover image is shown, derive the style from the theme and CSS instead.
+Derive the style entirely from the game name, genre, approved theme, and CSS — no cover image is available.
 
 Return ONLY valid JSON:
 {
-  "art_style": "<one precise phrase describing the visual style seen in the cover, e.g. 'flat vector illustration, 2px black stroke, warm earthy palette'>",
+  "art_style": "<one precise phrase, e.g. 'flat vector illustration, 2px black stroke, warm earthy palette'>",
+  "rendering": "<rendering technique, e.g. 'flat 2D vector' or 'pixel art' or 'clean illustrated'>",
+  "mood": "<atmosphere in 3-5 words, e.g. 'bright cheerful energetic' or 'calm minimal elegant'>",
+  "hex_palette": ["#RRGGBB", "#RRGGBB", "#RRGGBB"],
   "line_weight": "<e.g. 'clean 2px stroke, no texture'>",
   "shadow_style": "<e.g. 'soft drop-shadow only, no hard shadows'>",
-  "background_treatment": "<e.g. 'bokeh depth blur, warm ambient light'>",
+  "background_treatment": "<e.g. 'solid colour with subtle pattern, no depth blur'>",
   "icon_shape": "<e.g. 'rounded rectangle, 12px corner radius, badge style'>",
   "negative_terms": "<e.g. 'no photorealism, no gradients, no lens flare, no text baked in'>"
 }"""
@@ -927,7 +927,55 @@ def html_skeleton(html: str) -> str:
         skeleton = skeleton[:6000] + "\n...[truncated for brevity]"
     return skeleton
 
-def analyze_game(html: str) -> dict:
+def detect_genre(name: str, html: str) -> str:
+    """Map game name + HTML keywords to a genre key from config.json. Zero LLM cost."""
+    n = name.lower().replace("_", " ").replace("-", " ")
+    h = html.lower()
+
+    rules = [
+        ("match3",           lambda: any(k in n for k in ("match", "jewel", "gem", "bejeweled", "candy", "bubble"))),
+        ("tetris_block",     lambda: any(k in n for k in ("tetris", "block", "tetromino", "falling block"))),
+        ("2048_merge",       lambda: any(k in n for k in ("2048", "merge", "slide", "number puzzle", "threes"))),
+        ("slots_casino",     lambda: any(k in n for k in ("slot", "casino", "poker", "blackjack", "roulette", "bingo", "dice"))),
+        ("solitaire",        lambda: any(k in n for k in ("solitaire", "klondike", "freecell", "spider solitaire"))),
+        ("chess_strategy",   lambda: any(k in n for k in ("chess", "checkers", "draughts", "go game", "reversi", "othello"))),
+        ("mahjong",          lambda: any(k in n for k in ("mahjong", "mah jong", "mah-jong"))),
+        ("word_puzzle",      lambda: any(k in n for k in ("word", "crossword", "wordle", "scrabble", "hangman", "spelling", "letter", "boggle", "type"))),
+        ("platformer",       lambda: any(k in n for k in ("platformer", "platform", "jump", "run and jump", "super mario", "side scroll"))),
+        ("racing",           lambda: any(k in n for k in ("racing", "race", "car", "kart", "drift", "speed", "traffic"))),
+        ("farm_garden",      lambda: any(k in n for k in ("farm", "garden", "harvest", "plant", "flower", "crop"))),
+        ("rhythm_music",     lambda: any(k in n for k in ("rhythm", "music", "piano", "beat", "guitar", "drum", "dance"))),
+        ("tower_defense",    lambda: any(k in n for k in ("tower defense", "tower defence", "td game", "plants vs"))),
+        ("roguelike",        lambda: any(k in n for k in ("roguelike", "rogue", "dungeon", "dungeon crawler"))),
+        ("simulation_tycoon",lambda: any(k in n for k in ("tycoon", "simulation", "city", "idle factory", "manager", "empire"))),
+        ("cooking_food",     lambda: any(k in n for k in ("cooking", "chef", "kitchen", "food", "restaurant", "burger", "pizza"))),
+        ("quiz_trivia",      lambda: any(k in n for k in ("quiz", "trivia", "question", "knowledge"))),
+        ("runner",           lambda: any(k in n for k in ("runner", "endless run", "subway", "temple run", "infinite run"))),
+        ("shooter",          lambda: any(k in n for k in ("shooter", "shoot", "space invader", "bullet", "sniper", "gun"))),
+        ("arcade_classic",   lambda: any(k in n for k in ("snake", "pong", "pacman", "pac-man", "breakout", "asteroids", "frogger", "minesweeper"))),
+        ("sports",           lambda: any(k in n for k in ("football", "soccer", "basketball", "baseball", "tennis", "golf", "bowling", "ping pong", "volleyball", "cricket"))),
+        ("physics_puzzle",   lambda: any(k in n for k in ("physics", "angry bird", "catapult", "balance", "gravity", "elastic"))),
+        ("memory_match",     lambda: any(k in n for k in ("memory", "concentration", "pairs", "flip card", "matching card"))),
+        ("rpg_combat",       lambda: any(k in n for k in ("rpg", "role play", "adventure", "quest", "hero", "warrior", "dragon", "battle"))),
+        ("idle_clicker",     lambda: any(k in n for k in ("idle", "clicker", "cookie", "tap", "incremental"))),
+        ("board_game",       lambda: any(k in n for k in ("board game", "ludo", "monopoly", "scrabble board", "connect four", "tic tac", "noughts", "snakes and ladders"))),
+        ("puzzle_logic",     lambda: any(k in n for k in ("puzzle", "sudoku", "sliding", "jigsaw", "maze", "sokoban", "logic", "pipe", "nonogram"))),
+    ]
+
+    for genre, check in rules:
+        if check():
+            return genre
+
+    # HTML-level fallback signals
+    if re.search(r'drawImage|spritesheet|tilemap', html, re.IGNORECASE):
+        return "arcade_classic"
+    if re.search(r'CardDeck|deck\.push|shuffleDeck', html):
+        return "solitaire"
+
+    return "misc"
+
+
+def analyze_game(html: str, name: str = "") -> dict:
     """Static analysis — deterministic game type classification, zero LLM cost."""
     has_canvas     = bool(re.search(r'<canvas\b', html, re.IGNORECASE))
     has_getcontext = bool(re.search(r"getContext\s*\(\s*['\"]2d['\"]", html))
@@ -958,6 +1006,7 @@ def analyze_game(html: str) -> dict:
         "has_audio_ctx":     has_audio_ctx,
         "has_audio_el":      has_audio_el,
         "has_drag":          has_drag,
+        "genre":             detect_genre(name, html),
     }
 
 def extract_js_symbols(html: str) -> set:
@@ -1481,7 +1530,7 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
         if not img_meta.get("transparent"):
             continue
         p = img_dir / img_meta["filename"]
-        if p not in failed and p.exists():
+        if img_meta["filename"] not in failed and p.exists():
             _post_process(p, img_meta.get("w"), img_meta.get("h"))
 
     return failed
@@ -1681,11 +1730,11 @@ def beautify(src_dir: Path) -> bool:
     # ── Pre-pass: static game analysis (zero cost, deterministic) ────────────
     game_meta = prog.get("game_meta")
     if not game_meta:
-        game_meta = analyze_game(html)
+        game_meta = analyze_game(html, name)
         prog["game_meta"] = game_meta
         save_prog()
     render_type = game_meta.get("render_type", "dom")
-    print(f"    ○ game type: {render_type} | canvas={game_meta.get('has_canvas')} | dom_meas={game_meta.get('uses_dom_meas')} | levels={game_meta.get('has_levels')}")
+    print(f"    ○ game type: {render_type} | canvas={game_meta.get('has_canvas')} | dom_meas={game_meta.get('uses_dom_meas')} | levels={game_meta.get('has_levels')} | genre={game_meta.get('genre', 'misc')}")
 
     # ── Pass 0: determine visual theme + screen size ─────────────────────────
     theme_json = prog.get("theme_json")
@@ -1826,7 +1875,7 @@ def beautify(src_dir: Path) -> bool:
             f"Game genre: {genre}\n"
             f"Approved theme: {theme_json}\n\n"
             f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
-            f"Return ONLY valid JSON with these fields: art_style, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
+            f"Return ONLY valid JSON with these fields: art_style, rendering, mood, hex_palette, line_weight, shadow_style, background_treatment, icon_shape, negative_terms"
         )
         r = tp_analyze(
             problem=style_problem,
@@ -2099,7 +2148,7 @@ def main():
 
     scored_path = SELECTED / "scored_games.json"
     if not scored_path.exists():
-        print("✗ selected_300/scored_games.json not found — run select_games.py first")
+        print(f"✗ {scored_path} not found — run select_games.py first")
         return
 
     scored = json.loads(scored_path.read_text())

@@ -9,7 +9,7 @@ Automated pipeline that transforms AI-generated single-file HTML games into poli
 Takes a raw HTML game (single `index.html` file) and produces a fully themed version with:
 
 - **3-screen template**: Title screen → Gameplay → Game Over + Pause overlay
-- **Cover-driven style**: Visual style is extracted from the game's cover art and propagated consistently to all assets — CSS colours, UI panels, backgrounds, and sprites
+- **Game-derived style**: Visual style is derived from the game name, detected genre, and committed CSS — propagated consistently to all assets via a StyleLock brief (art style, palette, mood)
 - **Generated visual assets**: background, title logo, game preview, play button, UI panels (score, pause card, gameover card), optional game sprites — all AI-generated and on-theme
 - **Sound effects**: up to 5 SFX generated via ElevenLabs
 - **Responsive layout**: portrait (9:16) or landscape (16:9) depending on game type, letterboxed on any screen
@@ -24,12 +24,11 @@ The pipeline runs **12 passes** sequentially per game:
 
 | Pass | Name | What it does |
 |---|---|---|
-| **Cover Extract** | Style Extraction | Analyses the cover image and extracts a `cover_style` JSON (palette, rendering, mood, art style) — single source of truth for all downstream assets |
 | **Pass 0** | Theme + Layout | Analyses the game and decides visual theme, colour palette, font style, and aspect ratio |
 | **Pass 1** | Restructure | Wraps the game into a clean 3-screen HTML template with placeholder image tags already wired |
 | **Pass 2** | Logic Fix | Conservative bug fixes — null references, broken event listeners, score reset |
 | **Pass 3** | Visual Design | Full CSS redesign using the approved theme; image containers styled to avoid CSS conflicts |
-| **Style Lock** | Style Freeze | Builds a `style_lock` from `cover_style` — art direction brief used to keep all generated images consistent |
+| **Pass 0.5** | Style Lock | Builds `style_lock` JSON from game name, detected genre, theme, and committed CSS — art direction brief used to keep all generated images consistent |
 | **Pass 4A** | Manifest | LLM generates the full asset manifest: filenames, descriptions, sizes, usage targets |
 | **Pass 4D** | Asset Wiring | Wires all manifest assets into the HTML (background-image, src, z-index stacking) |
 | **Pass 4B/C** | Asset Generation | Generates all images (parallel, 4 workers) + SFX audio; post-processes each image (crop transparent padding, resize to manifest dimensions) |
@@ -141,7 +140,7 @@ Games are selected and scored from the source pool using `code/select_games.py` 
 
 ## Key Design Decisions
 
-**Cover-driven style consistency**: A dedicated cover extraction pass runs once per game and produces a `cover_style` JSON (hex palette, rendering style, mood, art style). This is the single source of truth — StyleLock is built directly from it, and `_build_desc` prefixes every image generation prompt with the extracted art direction. All assets come out on-theme without per-pass re-interpretation drift.
+**Game-derived style consistency**: A StyleLock pass (Pass 0.5) runs after the CSS redesign and produces a `style_lock` JSON (hex palette, rendering style, mood, art style, negative terms) derived entirely from the game name, detected genre, approved theme, and committed CSS. This is the single source of truth — `_build_desc` prefixes every image generation prompt with the extracted art direction. All assets come out on-theme without per-pass re-interpretation drift. Genre is auto-detected from the game name via `detect_genre()` and used to pull genre-specific art direction from `config.json`.
 
 **Placeholder approach (Pass 1)**: All asset `<img>` tags and background containers are wired in Pass 1 before CSS is generated. Pass 3 then styles them as image containers, preventing font/glow/shadow properties being applied to images.
 
