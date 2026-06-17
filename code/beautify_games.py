@@ -1412,30 +1412,18 @@ def tp_analyze(problem: str, fallback_system: str, fallback_html: str,
 
 
 # ─── Image generation ─────────────────────────────────────────────────────────
-def _strip_background(img_bytes: bytes) -> bytes:
-    """Remove solid/white background if present, then crop to content bounding box."""
+def _crop_transparent_padding(img_bytes: bytes) -> bytes:
+    """Crop any fully-transparent border from a PNG, keeping content pixels intact."""
     try:
         img = PILImage.open(BytesIO(img_bytes)).convert("RGBA")
-        pixels = list(img.getdata())
-        # Check if image has any real transparency (alpha < 250)
-        has_transparency = any(p[3] < 250 for p in pixels)
-        if not has_transparency:
-            # All pixels are opaque — likely white background; use rembg to remove it
-            try:
-                from rembg import remove as rembg_remove
-                img_bytes = rembg_remove(img_bytes)
-                img = PILImage.open(BytesIO(img_bytes)).convert("RGBA")
-            except Exception as e:
-                print(f"    ⚠  rembg failed ({e}), keeping original")
-        # Crop to bounding box to remove residual transparent border
         bbox = img.getbbox()
-        if bbox:
+        if bbox and bbox != (0, 0, img.width, img.height):
             img = img.crop(bbox)
         buf = BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
     except Exception as e:
-        print(f"    ⚠  background removal failed ({e}), keeping original")
+        print(f"    ⚠  padding crop failed ({e}), keeping original")
         return img_bytes
 
 
@@ -1464,8 +1452,10 @@ def gen_image(description: str, out: Path, transparent: bool = False) -> bool:
         if data_url:
             img_bytes = base64.b64decode(data_url.split(",", 1)[1])
             if transparent:
-                # Crop to bounding box to remove any residual transparent border
-                img_bytes = _strip_background(img_bytes)
+                # Only crop transparent padding — never remove the background with rembg.
+                # The model is asked for native transparency via extra["background"]="transparent"
+                # and the prompt suffix; rembg on stylized UI assets destroys content.
+                img_bytes = _crop_transparent_padding(img_bytes)
             out.write_bytes(img_bytes)
             return True
 
