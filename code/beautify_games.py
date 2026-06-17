@@ -1444,8 +1444,8 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
             if target_w and target_h and (img.width != target_w or img.height != target_h):
                 img = img.resize((target_w, target_h), PILImage.LANCZOS)
             img.save(path)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"    ⚠  _post_process {path.name}: {e}")
 
     def _gen_one(img: dict) -> tuple[str, bool]:
         fname = img["filename"]
@@ -1482,6 +1482,16 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
                 fname = img["filename"]
                 failed.add(fname)
                 print(f"    ✗  image {fname}: exception — {e}")
+
+    # Final verification: re-run _post_process on all transparent images to catch any
+    # silent failures during parallel generation (thread-safety edge cases in PIL save)
+    for img_meta in images:
+        if not img_meta.get("transparent"):
+            continue
+        p = img_dir / img_meta["filename"]
+        if p not in failed and p.exists():
+            _post_process(p, img_meta.get("w"), img_meta.get("h"))
+
     return failed
 
 
