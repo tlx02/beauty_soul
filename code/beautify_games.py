@@ -65,7 +65,8 @@ except ImportError:
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_KEY,
-    default_headers={"X-Title": "800 Games Beautifier"}
+    default_headers={"X-Title": "800 Games Beautifier"},
+    timeout=300,  # 5-minute hard timeout per API call — prevents indefinite hangs
 )
 
 # ─── Prompts ──────────────────────────────────────────────────────────────────
@@ -1276,6 +1277,49 @@ def fix_css_issues(html: str) -> str:
 
     return inject_css(html_template, f"<style>\n{css.strip()}\n</style>")
 
+
+def _normalize_asset_paths(html: str, manifest: dict) -> str:
+    """Ensure every manifest asset is referenced with the correct assets/images/ prefix.
+
+    Pass 4D sometimes emits bare filenames (src="title.png") or images/ prefixes
+    instead of the required assets/images/ prefix. This post-processor fixes all
+    occurrences deterministically using the manifest as the ground truth.
+    """
+    if not manifest:
+        return html
+    filenames = {img["filename"] for img in manifest.get("images", [])}
+    fixed = 0
+    for fname in filenames:
+        correct = f"assets/images/{fname}"
+        # Fix bare src="fname" or src='fname'
+        for bad in (f'src="{fname}"', f"src='{fname}'"):
+            good = bad.replace(fname, correct)
+            if bad in html:
+                html = html.replace(bad, good)
+                fixed += 1
+        # Fix src="images/fname"
+        for bad in (f'src="images/{fname}"', f"src='images/{fname}'"):
+            good = bad.replace(f"images/{fname}", correct)
+            if bad in html:
+                html = html.replace(bad, good)
+                fixed += 1
+        # Fix url('fname') and url("fname") in CSS
+        for bad in (f"url('{fname}')", f'url("{fname}")', f"url({fname})"):
+            good = bad.replace(fname, correct)
+            if bad in html:
+                html = html.replace(bad, good)
+                fixed += 1
+        # Fix url('images/fname')
+        for bad in (f"url('images/{fname}')", f'url("images/{fname}")', f"url(images/{fname})"):
+            good = bad.replace(f"images/{fname}", correct)
+            if bad in html:
+                html = html.replace(bad, good)
+                fixed += 1
+    if fixed:
+        print(f"    ○ normalized {fixed} asset path(s) to assets/images/ prefix")
+    return html
+
+
 _PASS1_REQUIRED_IDS = [
     "screen-home", "screen-game", "screen-gameover",
     "btn-start", "btn-playagain", "btn-home-game", "btn-pause-game", "pause-overlay",
@@ -1727,6 +1771,10 @@ def beautify(src_dir: Path) -> bool:
 
     html = latest_html()
 
+    # Extract canonical game title from <title> tag (more reliable than folder name)
+    _title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+    display_name = _title_match.group(1).strip() if _title_match else name
+
     # ── Pre-pass: static game analysis (zero cost, deterministic) ────────────
     game_meta = prog.get("game_meta")
     if not game_meta:
@@ -1743,6 +1791,7 @@ def beautify(src_dir: Path) -> bool:
         pass0_input = game_context_for_pass0(html)
         pass0_problem = (
             f"Analyse this HTML game and decide the single best visual theme, layout, and aspect ratio.\n\n"
+            f"Game title: {display_name}\n\n"
             f"Game structure and JS mechanics:\n{pass0_input}\n\n"
             f"Return ONLY valid JSON (no markdown, no explanation):\n"
             f'{{"theme":"<2-5 word theme>","palette":["<hex>","<hex>","<hex>","<hex>"],'
@@ -1871,7 +1920,7 @@ def beautify(src_dir: Path) -> bool:
         css_sample, _ = extract_css(html)
         genre = game_meta.get("genre", "misc") if game_meta else "misc"
         style_problem = (
-            f"Game name: {name}\n"
+            f"Game name: {display_name}\n"
             f"Game genre: {genre}\n"
             f"Approved theme: {theme_json}\n\n"
             f"Current CSS (shows committed colours and typography):\n{(css_sample[:3000].rsplit('}', 1)[0] + '}') if css_sample else '/* no styles */'}\n\n"
@@ -1926,6 +1975,7 @@ def beautify(src_dir: Path) -> bool:
         r = call_llm(prompt, html, "pass4d")
         if r:
             html = fix_css_issues(r)
+            html = _normalize_asset_paths(html, manifest)
             (out_dir / "index_pass4.html").write_text(html, encoding="utf-8")
             prog["pass4_wire"] = True
         else:
