@@ -2158,11 +2158,27 @@ def main():
     ap = argparse.ArgumentParser(description="Beautify selected games")
     grp = ap.add_mutually_exclusive_group(required=True)
     grp.add_argument("--pilot", type=int, metavar="N", help="Process top N games by score")
-    grp.add_argument("--game",  type=str, metavar="NAME",  help="Process one specific game")
+    grp.add_argument("--game",  type=str, metavar="NAME",  help="Process one specific game by name")
+    grp.add_argument("--path",  type=str, metavar="PATH",  help="Process a game from an arbitrary folder path")
     grp.add_argument("--all",   action="store_true",       help="Process all 300 games")
     ap.add_argument("--resume", action="store_true", help="Skip games already through pass 3")
     ap.add_argument("--offset", type=int, default=0, metavar="N", help="Skip first N games (for parallel batches)")
     args = ap.parse_args()
+
+    # --path bypasses the scored games list entirely
+    if args.path:
+        src = Path(args.path).resolve()
+        if not src.is_dir():
+            print(f"✗ not a directory: {src}")
+            return
+        if not (src / "index.html").exists():
+            print(f"✗ no index.html found in: {src}")
+            return
+        BEAUTIFIED.mkdir(exist_ok=True)
+        ok = beautify(src)
+        print(f"\nDone — {'succeeded' if ok else 'failed'}")
+        print(f"Output: {BEAUTIFIED / src.name}/")
+        return
 
     scored_path = SELECTED / "scored_games.json"
     if not scored_path.exists():
