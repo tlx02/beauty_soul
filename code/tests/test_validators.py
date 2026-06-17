@@ -103,6 +103,7 @@ def test_validate_pass1_all_present():
       <div id="screen-game" class="screen"></div>
       <div id="screen-gameover" class="screen"></div>
       <button id="btn-start"></button>
+      <button id="btn-playagain"></button>
       <button id="btn-home-game"></button>
       <button id="btn-pause-game"></button>
       <div id="pause-overlay"></div>
@@ -116,12 +117,13 @@ def test_validate_pass1_missing_ids():
     missing = validate_pass1(html)
     assert "screen-gameover" in missing
     assert "btn-start" in missing
+    assert "btn-playagain" in missing
     assert "pause-overlay" in missing
 
 
 def test_validate_pass1_single_quote_ids():
     from beautify_games import validate_pass1
-    html = "<div id='screen-home'></div><div id='screen-game'></div><div id='screen-gameover'></div><button id='btn-start'></button><button id='btn-home-game'></button><button id='btn-pause-game'></button><div id='pause-overlay'></div>"
+    html = "<div id='screen-home'></div><div id='screen-game'></div><div id='screen-gameover'></div><button id='btn-start'></button><button id='btn-playagain'></button><button id='btn-home-game'></button><button id='btn-pause-game'></button><div id='pause-overlay'></div>"
     assert validate_pass1(html) == []
 
 
@@ -139,6 +141,17 @@ def test_pass4a_has_three_background_variants():
     assert "background_home.png" in PASS4A
     assert "background_game.png" in PASS4A
     assert "background_gameover.png" in PASS4A
+
+
+def test_pass4a_has_btn_playagain():
+    from beautify_games import PASS4A
+    assert "btn_playagain.png" in PASS4A
+
+
+def test_pass1_has_btn_playagain_template():
+    from beautify_games import PASS1
+    assert "btn-playagain" in PASS1
+    assert "btn_playagain.png" in PASS1
 
 
 def test_generate_images_parallel_returns_failed_set():

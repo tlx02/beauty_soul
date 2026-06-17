@@ -655,6 +655,20 @@ TOPBAR + PAUSE CARD:
     and a contrasting text colour. All three buttons must be the same size, full-width within
     the card. Never leave these buttons unstyled.
 
+Z-INDEX STACKING (strictly enforced):
+  Every game uses this layering — apply it as you wire assets, do not leave z-index unset:
+  - Decorative background elements (floating shapes, scattered 3D pieces, ambient particles
+    that are purely visual decoration and are separate DOM elements): z-index: 0.
+    These must NEVER appear above any UI panel, overlay, or button.
+    NEVER apply z-index:0 to the main game canvas, game board, grid, or any element
+    whose children are JS-positioned game objects — those stay at z-index: 1.
+  - Game board / play area / canvas: z-index: 1
+  - HUD / topbar row: z-index: 10
+  - In-game popup panels (win card, gameover card inside the play area): z-index: 100
+  - #pause-overlay (the full-screen dim + pause card): z-index: 9999
+  If you see any decorative DOM element that could overlap a panel or overlay, explicitly set
+  its z-index to 0 and its parent to position:relative so the stacking context is correct.
+
 ALIGNMENT:
   - All wired sprites must appear visually centred on their game object — never offset or clipped
   - DOM sprite <img> tags: set display:block, object-fit:contain, and match the container's dimensions
@@ -816,6 +830,12 @@ Fix the following classes of bugs and visual issues. Do not change game logic or
      sortable slots, etc.) must not have a white or near-white background when the game theme is
      dark or richly coloured. A white fill breaks immersion against a dark background. Replace
      with a semi-transparent or theme-appropriate dark fill.
+   - Z-index stacking: Decorative background elements (floating shapes, scattered 3D pieces,
+     ambient particles — purely visual, not interactive) must have z-index: 0. If any such
+     element appears visually on top of a UI panel, overlay, or button, fix it by setting
+     z-index: 0 on the decorative element (and z-index: 9999 on #pause-overlay if not already set).
+     The stacking order must always be: decorations (0) → game board (1) → HUD (10) →
+     popups (100) → pause overlay (9999).
 
    GAME-OVER SCREEN (#screen-gameover):
    - Is the primary score/result displayed at LARGE size — clearly bigger than secondary stats?
@@ -837,37 +857,41 @@ Fix the following classes of bugs and visual issues. Do not change game logic or
 Return ONLY the complete modified HTML. No explanation."""
 
 PASS_VISUAL_AUDIT = """\
-You are a visual QA engineer reviewing a mobile HTML game rendered in a real browser.
-Screenshots of the 3 game screens are shown above (labelled HOME, GAME, GAMEOVER).
-If a COVER ART image is included, use it as the quality reference — the game's palette,
-rendering style, and visual language should match it.
+You are a strict visual QA engineer reviewing a mobile HTML game rendered in a real browser.
+Screenshots are labelled HOME, GAME, PAUSE, GAMEOVER. COVER ART (if shown) is the quality reference.
 
-For each screen, identify ONLY concrete, fixable visual defects — things that look broken,
-invisible, misaligned, clipped, or obviously wrong to a player.
-Be specific and actionable (name the element and the problem).
+Be critical. Err on the side of reporting issues — a false positive is better than a miss.
+Report everything that looks wrong, broken, misaligned, or would frustrate a real player.
 
-Good findings:
-- "Score text is white on white panel — invisible"
-- "Pause card is clipped at the bottom — needs overflow visible or smaller max-height"
-- "Game board occupies only 20% of the screen height — needs flex:1 to fill available space"
-- "Gameover screen shows no score — result element is empty"
-- "Title image is tiny (< 30% width) — needs larger max-width"
-- "Large empty white rectangle below game board — orphaned container, set display:none"
-- "Button text is black on a dark background — poor contrast"
+PRIORITY ISSUES — always report if present:
+1. Game board tiles, pieces, or decorative 3D objects appearing OVER UI panels, overlays,
+   buttons, or text on any screen. These should be behind UI, never visually on top of it.
+2. Pause card not cleanly centred in the overlay — off-centre, pushed to a corner,
+   partially cut off, or overlapped by game objects.
+3. Score/stat labels with no visible value, or text illegible against its background.
+4. Buttons partially hidden, overlapped, or with no readable label.
+5. Game board occupying less than 50% of the screen height on the game screen.
+6. Large blank or white areas with no content (orphaned containers).
+7. Content clipped by its container.
 
-NOT useful — skip these:
-- "Looks generic" / "Could be more polished" / "Colours not matching"
-- Any issue with a <canvas> element showing a solid background fill — that is a JS-side fix
-  handled by a later pass, not a CSS issue. Do NOT report canvas background colour as a defect.
+ALSO REPORT:
+- Elements that should be centred but are visibly off to one side
+- HUD rows whose combined height rivals the game board
+- Flex children not filling available space
+
+DO NOT report:
+- Subjective style preferences ("looks generic", "could be more polished")
+- Canvas solid fill colour (handled separately by a later pass)
 
 Return ONLY valid JSON, no markdown:
 {
   "home": ["<specific issue>", ...],
   "game": ["<specific issue>", ...],
+  "pause": ["<specific issue>", ...],
   "gameover": ["<specific issue>", ...],
   "overall": ["<cross-screen CSS issue>", ...]
 }
-Return empty arrays for screens that look correct."""
+If a screen is genuinely correct with no fixable defects, return an empty array for it."""
 
 # ─── CSS extraction helpers (for pass 3) ─────────────────────────────────────
 STYLE_RE = re.compile(r'(<style[^>]*>)(.*?)(</style>)', re.DOTALL | re.IGNORECASE)
@@ -1208,6 +1232,7 @@ def fix_css_issues(html: str) -> str:
         css += "\n/* ── structural guardrail ── */\n"
         css += "#screen-game { position: relative; overflow: hidden !important; }\n"
         css += "#screen-game > * { max-width: 100% !important; overflow: hidden !important; }\n"
+        css += "#pause-overlay { z-index: 9999 !important; }\n"
     # Also strip any overflow:visible declarations from within screen-game scope
     css = re.sub(
         r'(#screen-game[^{]*\{[^}]*?)overflow\s*:\s*visible\s*;',
@@ -1564,6 +1589,23 @@ def screenshot_screens(out_dir: Path, html: str) -> dict:
                 result["game_b64"] = base64.b64encode(page.screenshot()).decode()
             except Exception:
                 pass
+
+            # Pause screen — force-show #pause-overlay while on game screen
+            if result.get("game_b64"):
+                try:
+                    page.evaluate("""() => {
+                        const overlay = document.getElementById('pause-overlay');
+                        if (overlay) { overlay.style.display = 'flex'; overlay.classList.add('active'); }
+                    }""")
+                    page.wait_for_timeout(400)
+                    result["pause_b64"] = base64.b64encode(page.screenshot()).decode()
+                    # Dismiss overlay before gameover screenshot
+                    page.evaluate("""() => {
+                        const overlay = document.getElementById('pause-overlay');
+                        if (overlay) { overlay.style.display = ''; overlay.classList.remove('active'); }
+                    }""")
+                except Exception:
+                    pass
 
             # Gameover screen — force-show it via JS (bypass needing to actually play)
             try:
@@ -1943,64 +1985,80 @@ def beautify(src_dir: Path) -> bool:
         prog["pass4_assets"] = True
         save_prog()
 
-    # ── Pass 4.5: screenshot-based visual audit ───────────────────────────────
+    # ── Pass 4.5: screenshot-based visual audit (loops until clean, max 3 iters) ─
     if not prog.get("pass_va"):
         print("    → Pass 4.5: visual audit (screenshot)")
-        screenshots = screenshot_screens(out_dir, html)
-        if not screenshots:
-            print("    ○ visual audit skipped (Playwright unavailable)")
-            prog["pass_va"] = True
-            save_prog()
-        else:
-            # Build labelled image list: optional cover first, then 3 screens
+        MAX_VA_ITERS = 3
+        va_done = False
+        for va_iter in range(MAX_VA_ITERS):
+            iter_label = f"{va_iter+1}/{MAX_VA_ITERS}"
+            screenshots = screenshot_screens(out_dir, html)
+            if not screenshots:
+                print("    ○ visual audit skipped (Playwright unavailable)")
+                va_done = True
+                break
+
+            # Build labelled image list: optional cover first, then all captured screens
             images = []
             if cover_b64:
                 images.append(("COVER ART (quality reference):", cover_b64))
-            for key, label in [("home_b64", "HOME SCREEN:"), ("game_b64", "GAME SCREEN:"), ("gameover_b64", "GAMEOVER SCREEN:")]:
+            for key, label in [("home_b64", "HOME SCREEN:"), ("game_b64", "GAME SCREEN:"),
+                                ("pause_b64", "PAUSE SCREEN:"), ("gameover_b64", "GAMEOVER SCREEN:")]:
                 if screenshots.get(key):
                     images.append((label, screenshots[key]))
+
             if len(images) < (2 if cover_b64 else 1):
-                print("    ○ visual audit: could not capture enough screens, skipping")
-                prog["pass_va"] = True
-                save_prog()
+                print(f"    ○ visual audit {iter_label}: insufficient screenshots, skipping")
+                va_done = True
+                break
+
+            skeleton = html_skeleton(html)
+            r = call_llm_vision_multi(PASS_VISUAL_AUDIT, skeleton, images,
+                                      f"visual-audit-{va_iter+1}", max_tokens=2048)
+            issues = _extract_json_from_solve(r) if r else None
+
+            if not issues or not isinstance(issues, dict):
+                print(f"    ○ visual audit {iter_label}: could not parse response")
+                va_done = True
+                break
+
+            all_issues = []
+            for screen in ("home", "game", "pause", "gameover", "overall"):
+                items = issues.get(screen, [])
+                if items:
+                    all_issues.append(f"{screen.upper()} SCREEN:" if screen != "overall" else "OVERALL:")
+                    all_issues.extend(f"  - {i}" for i in items)
+
+            if not all_issues:
+                print(f"    ✓ visual audit {iter_label}: no issues found")
+                va_done = True
+                break
+
+            total = sum(len(v) for v in issues.values() if isinstance(v, list))
+            print(f"    ⚠  visual audit {iter_label}: {total} issue(s) — applying fixes")
+            issue_text = "\n".join(all_issues)
+            fix_prompt = (
+                f"VISUAL AUDIT: The game was rendered in a real browser and the following "
+                f"visual defects were found:\n\n{issue_text}\n\n"
+                f"Fix ALL of the above by editing only <style> blocks and element "
+                f"class/inline-style attributes. Do NOT change game logic, asset "
+                f"filenames, or element IDs. Return ONLY the complete fixed HTML."
+            )
+            r2 = call_llm(fix_prompt, html, f"visual-audit-fix-{va_iter+1}", max_tokens=65536)
+            if r2:
+                html = fix_css_issues(r2)
+                (out_dir / "index_pass_va.html").write_text(html, encoding="utf-8")
             else:
-                skeleton = html_skeleton(html)
-                r = call_llm_vision_multi(PASS_VISUAL_AUDIT, skeleton, images, "visual-audit", max_tokens=1024)
-                issues = _extract_json_from_solve(r) if r else None
-                va_done = False
-                if issues and isinstance(issues, dict):
-                    all_issues = []
-                    for screen in ("home", "game", "gameover", "overall"):
-                        items = issues.get(screen, [])
-                        if items:
-                            all_issues.append(f"{screen.upper()} SCREEN:" if screen != "overall" else "OVERALL:")
-                            all_issues.extend(f"  - {i}" for i in items)
-                    if all_issues:
-                        issue_text = "\n".join(all_issues)
-                        print(f"    ⚠  visual audit found issues — applying fixes")
-                        fix_prompt = (
-                            f"VISUAL AUDIT: The game was rendered in a real browser and the following "
-                            f"visual defects were found:\n\n{issue_text}\n\n"
-                            f"Fix ALL of the above by editing only <style> blocks and element "
-                            f"class/inline-style attributes. Do NOT change game logic, asset "
-                            f"filenames, or element IDs. Return ONLY the complete fixed HTML."
-                        )
-                        r2 = call_llm(fix_prompt, html, "visual-audit-fix", max_tokens=65536)
-                        if r2:
-                            html = fix_css_issues(r2)
-                            (out_dir / "index_pass_va.html").write_text(html, encoding="utf-8")
-                            va_done = True
-                        else:
-                            print(f"    ⚠  visual audit fix LLM failed — will retry next run")
-                    else:
-                        print("    ✓ visual audit: no issues found")
-                        va_done = True
-                else:
-                    print("    ○ visual audit: could not parse issues response")
-                    va_done = True  # don't retry unparseable responses
-                if va_done:
-                    prog["pass_va"] = True
-                save_prog()
+                print(f"    ⚠  visual audit fix LLM failed — will retry next run")
+                break  # leave pass_va unset so it retries next run
+        else:
+            # for-loop exhausted without a clean pass
+            print(f"    ⚠  visual audit: reached max {MAX_VA_ITERS} iterations")
+            va_done = True
+
+        if va_done:
+            prog["pass_va"] = True
+        save_prog()
     elif (out_dir / "index_pass_va.html").exists():
         html = (out_dir / "index_pass_va.html").read_text(encoding="utf-8")
 

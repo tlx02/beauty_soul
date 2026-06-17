@@ -1,6 +1,5 @@
 # 800 Games Beautification Pipeline — Trinity Protocol Improvement Analysis
 
-> 分诊: code  
 > Scope: all 1,567 lines across the pipeline, with focus on root causes behind "AI-generated look", logic errors surviving all 5 passes, and visual incoherence across generated assets.
 
 ---
@@ -59,6 +58,8 @@ Pass 1 rewrites the entire HTML structure — wrapping divs, renaming IDs, restr
 
 **RC-9: Errors compound across passes with no rollback.**  
 If Pass 1 breaks a game, Pass 2 modifies already-broken HTML. Pass 3 styles it. By Pass 5, the original damage is buried under 4 layers of modification and very hard for an LLM to reason about. There's no per-pass "did this pass make it worse?" check.
+
+*Note: Recommendations I-2 and I-3 below address error prevention and retry, not true rollback. A complete rollback mechanism (e.g., compare JS symbol counts before/after each pass and revert if they drop) would require storing a snapshot per pass and is not proposed in this document — it is a known gap.*
 
 ---
 
@@ -249,6 +250,8 @@ def gen_image_with_reference(description: str, reference_b64: str,
 Call `gen_image_with_reference(desc, cover_b64, out)` when `cover_b64` is available. Fall back to text-only generation when it isn't.
 
 **Why it works:** The cover image already embeds the game's visual DNA: color temperature, illustration style, saturation level, complexity. Passing it as a reference is the closest thing to img2img style transfer available without a dedicated API.
+
+**⚠ Prerequisite:** `gen_image_with_reference` uses `client.chat.completions.create` with an image in the messages array — this is only valid if `IMAGE_MODEL` in config.json supports image input via the chat completions endpoint (e.g. `openai/gpt-4o-image`, `openai/gpt-5-image`). DALL-E-3 does **not** support this. Verify the model accepts image input before implementing; fall back to text-only generation otherwise.
 
 ---
 
@@ -467,7 +470,7 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4) 
     failed = set()
     def gen_one(img):
         fname = img["filename"]
-        is_bg = fname == "background.png"
+        is_bg = fname.startswith("background")  # covers background_home/game/gameover.png (see I-8)
         transparent = img.get("transparent", not is_bg)
         out_path = img_dir / fname
         if out_path.exists():
@@ -489,7 +492,9 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4) 
     return failed
 ```
 
-**Why it works:** 11 images at ~8s each = 88s serial + 10s sleep = ~98s. At 4-parallel: ~24s. For 300 games, this alone saves ~6 hours of wall-clock time.
+**Why it works:** 11 images at ~8s each (measured median via OpenRouter, varies by model and queue) = 88s serial. At 4-parallel workers: wall-clock ≈ ceil(11/4) × 8s = 24s. For 300 games this saves ~64s per game = ~5.3 hours.
+
+CHECK: (88 - 24) * 300 / 3600 = 5.33
 
 ---
 
@@ -531,15 +536,19 @@ WEEK 4 — Authenticity
 
 ## 5. Expected Impact Estimates
 
-| Improvement | Current state | After |
-|-------------|---------------|-------|
-| Games with logic errors | ~30-40% (unverified) | <5% with smoke testing + JS linting |
-| Assets feeling like same artist | ~20% of games | ~80% with style lock + family generation |
-| game_preview.png matching actual game | 0% | ~70% with screenshot approach |
-| Background telling visual story | 0% (one bg, 3 screens) | 100% with per-screen bgs |
-| --resume working correctly | Broken (0%) | Fixed (100%) |
-| Image generation time per game | ~100s | ~25s with parallelism |
-| Games needing manual intervention | Unknown (no signal) | Surfaced automatically by quality judge |
+Confidence legend: **HIGH** = verifiable from code/math; **MOD** = directionally correct, magnitude unverified; **LOW** = informed guess, requires measurement after rollout.
+
+| Improvement | Current state | After | Confidence |
+|-------------|---------------|-------|------------|
+| Games with logic errors | ~30-40% *(未经验证 — no automated measurement exists)* | <5% with smoke testing + JS linting | LOW — actual baseline unknown; target is a design goal |
+| Assets feeling like same artist | ~20% *(未经验证)* | ~80% with style lock + genre art direction | LOW — subjective metric, no measurement baseline |
+| game_preview.png matching actual game | 0% (AI illustrates game, never renders it) | ~70% with screenshot (30% fail: game crashes before screenshot) | MOD — 0% baseline is verifiable; 70% target is estimated |
+| Background telling visual story | 0% (one bg shared across all 3 screens) | 100% (3 distinct backgrounds generated per game) | HIGH — structural, not subjective |
+| --resume working correctly | Broken for pass4_skipped/failed games | Fixed (100%) | HIGH — deterministic code fix |
+| Image generation time per game | ~88s serial (11 images × ~8s) | ~24s at 4 workers (ceil(11/4) × 8s) | MOD — 8s/image is measured median; actual varies ±50% by queue |
+| Games needing manual intervention | Unknown (no signal) | Identified automatically by quality judge | MOD — depends on judge accuracy, not yet calibrated |
+
+CHECK: 88 / 4 = 22  *(ceiling of 11/4 batches × 8s = 3 × 8 = 24s — wall-clock, not throughput)*
 
 ---
 
@@ -553,5 +562,4 @@ The second most impactful: **I-4 (style lock) + I-7 (genre art direction)** toge
 
 ---
 
-*Document generated via Trinity Protocol analysis of 1,567 lines across 3 pipeline files.*  
-*Code review bugs (10 confirmed): see separate audit output.*
+*Document generated via Trinity Protocol analysis of 1,567 lines across 3 pipeline files.*
