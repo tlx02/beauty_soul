@@ -48,7 +48,7 @@ secrets = json.loads((CODE_DIR / "secrets.json").read_text())
 OPENROUTER_KEY = secrets["openrouter"]
 ELEVENLABS_KEY = secrets["elevenlabs"]
 LLM_MODEL      = config.get("llm_model",   "anthropic/claude-sonnet-4-5")
-IMAGE_MODEL    = config.get("image_model", "openai/dall-e-3")
+IMAGE_MODEL    = config.get("image_model", "openai/gpt-5-image")
 MAX_TOKENS     = config.get("max_tokens",  32768)
 
 # ─── Trinity Protocol SDK ─────────────────────────────────────────────────────
@@ -1056,30 +1056,6 @@ def game_context_for_pass0(html: str) -> str:
     return f"=== HTML STRUCTURE ===\n{struct}\n\n=== GAME LOGIC (truncated) ===\n{js}"
 
 
-def call_llm_vision(system: str, text: str, image_b64: str, label: str,
-                    max_tokens: int = MAX_TOKENS) -> str | None:
-    try:
-        res = client.chat.completions.create(
-            model=LLM_MODEL,
-            max_tokens=max_tokens,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-                    {"type": "text", "text": f"{system}\n\n{text}"}
-                ]
-            }]
-        )
-        if res.choices[0].finish_reason == "length":
-            print(f"    ⚠  {label}: truncated")
-            return None
-        result = _strip_fences(res.choices[0].message.content)
-        result = _fix_screen_backgrounds(result)
-        return result
-    except Exception as e:
-        print(f"    ✗  {label}: {e}")
-        return None
-
 def call_llm_vision_multi(system: str, text: str, images: list,
                            label: str, max_tokens: int = 2048) -> str | None:
     """Call LLM with multiple labelled images. images: list of (label_str, base64_png) tuples."""
@@ -1322,7 +1298,7 @@ def _normalize_asset_paths(html: str, manifest: dict) -> str:
 
 _PASS1_REQUIRED_IDS = [
     "screen-home", "screen-game", "screen-gameover",
-    "btn-start", "btn-playagain", "btn-home-game", "btn-pause-game", "pause-overlay",
+    "btn-start", "btn-playagain", "btn-home-game", "btn-pause-game", "pause-overlay", "pause-card",
 ]
 
 def validate_pass1(html: str) -> list[str]:
@@ -1385,7 +1361,7 @@ def _extract_json_from_solve(text: str) -> dict | None:
 
 
 def tp_analyze(problem: str, fallback_system: str, fallback_html: str,
-               label: str, max_tokens: int = 1024, file_paths: list = None) -> str | None:
+               label: str, max_tokens: int = 1024) -> str | None:
     """Run Trinity Protocol solve() for analytical passes; fall back to call_llm on failure.
 
     Returns raw text output (same contract as call_llm).
@@ -1397,8 +1373,6 @@ def tp_analyze(problem: str, fallback_system: str, fallback_html: str,
                 problem,
                 backend="openrouter",
                 max_tokens=max_tokens,
-                file_paths=file_paths,
-                verify_consistency=bool(file_paths),
                 adaptive=True,
             )
             stripped_r = result.strip() if result else ""
@@ -1865,17 +1839,22 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 2: fix logic ─────────────────────────────────────────────────────
     if not prog.get("pass2"):
         print("    → Pass 2: fix game logic")
+        pre_pass2_html = html
         r = call_llm(PASS2, html, "pass2")
         if r:
-            html = r
+            candidate = r
             # JS syntax check — catch syntax errors introduced by Pass 2
-            js_errors = validate_js_syntax(html)
+            js_errors = validate_js_syntax(candidate)
             if js_errors:
                 print(f"    ⚠  pass2 JS syntax errors ({len(js_errors)} lines) — retrying")
                 error_note = f"\n\nJS SYNTAX ERRORS in your output:\n" + "\n".join(js_errors[:5]) + "\nFix these errors and return the complete corrected HTML."
-                r2 = call_llm(PASS2 + error_note, html, "pass2-syntax-retry")
+                r2 = call_llm(PASS2 + error_note, candidate, "pass2-syntax-retry")
                 if r2 and not validate_js_syntax(r2):
-                    html = r2
+                    candidate = r2
+                elif validate_js_syntax(candidate):
+                    print(f"    ⚠  pass2 retry still broken — reverting to pre-pass2 HTML")
+                    candidate = pre_pass2_html
+            html = candidate
             (out_dir / "index_pass2.html").write_text(html, encoding="utf-8")
             prog["pass2"] = True
         else:
@@ -1919,7 +1898,7 @@ def beautify(src_dir: Path) -> bool:
         r = tp_analyze(
             problem=style_problem,
             fallback_system=STYLE_LOCK,
-            fallback_html=f"Game: {name}\nGenre: {genre}\nTheme: {theme_json}",
+            fallback_html=f"Game: {display_name}\nGenre: {genre}\nTheme: {theme_json}",
             label="style-lock",
             max_tokens=512,
         )
