@@ -74,8 +74,11 @@ Create `code/secrets.json` (never commit this file):
 ## Usage
 
 ```bash
-# Process one game
+# Process one game by name (must be in selected_300_new/)
 python3 code/beautify_games.py --game 2048
+
+# Process any game from an arbitrary folder path
+python3 code/beautify_games.py --path /path/to/my_game
 
 # Process top N games by score
 python3 code/beautify_games.py --pilot 10
