@@ -463,6 +463,7 @@ REQUIRED — always include all ten:
      btn_home.png, two vertical bars, transparent background.
   9. pause_card.png — decorative background panel for the pause overlay card (#pause-card).
      Styled to match the game theme. NO text, NO buttons baked in. Transparent background.
+     Must be perfectly front-facing and flat — no perspective tilt or 3D angle.
   10. btn_playagain.png — PLAY AGAIN button for the game-over screen (#btn-playagain). Same
       visual language as btn_play.png but reads "PLAY AGAIN" or shows a replay icon + text.
       Pill/badge shape, transparent background. The primary CTA on game-over — bold and prominent.
@@ -479,6 +480,9 @@ OPTIONAL UI CHROME — up to 4 additional panel/frame images. These make the gam
   CRITICAL RULES for UI chrome:
   - DECORATIVE FRAME ONLY — describe the shape, texture, colour. NO text, NO numbers, NO icons
     baked into the image. Live data (score values, button labels) is rendered by HTML on top.
+  - FRONT-FACING ONLY — every card/panel must be rendered perfectly flat and straight-on, as if
+    the viewer is looking directly at it head-on. NO perspective tilt, NO 3D rotation, NO angle.
+    The card edges must be parallel to the image edges. A tilted or angled card breaks layout.
   - transparent: true always (these overlay on the background)
   - "usage" field must name the HTML element ID or class it wraps (e.g. "#score-panel", ".gameover-card")
   - NEVER generate an image for the game board, grid, play area, tile container, canvas wrapper,
@@ -518,7 +522,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
     {{"filename": "btn_play.png", "description": "...", "usage": "PLAY button on title screen", "transparent": true, "w": 280, "h": 100}},
     {{"filename": "btn_home.png", "description": "...", "usage": "#btn-home-game", "transparent": true, "w": 80, "h": 80}},
     {{"filename": "btn_pause.png", "description": "...", "usage": "#btn-pause-game", "transparent": true, "w": 80, "h": 80}},
-    {{"filename": "pause_card.png", "description": "...", "usage": "#pause-card", "transparent": true, "w": 360, "h": 440}},
+    {{"filename": "pause_card.png", "description": "...(front-facing flat panel, no perspective tilt)...", "usage": "#pause-card", "transparent": true, "w": 360, "h": 440}},
     {{"filename": "btn_playagain.png", "description": "...", "usage": "#btn-playagain on game-over screen", "transparent": true, "w": 320, "h": 100}},
     ...optional UI chrome and sprites...
   ],
