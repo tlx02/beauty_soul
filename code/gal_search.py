@@ -315,6 +315,14 @@ class GALSearch:
                     canvas.paste(img, (x, y), img)
                     img = canvas
                 else:
+                    # Flatten transparency onto black before scale-to-fill crop.
+                    # GAL assets can be RGBA with transparent areas (split-panel
+                    # animation frames, etc.). Without this, transparent pixels
+                    # render as white holes when used as a CSS background-image.
+                    if img.mode == "RGBA":
+                        bg = PILImage.new("RGBA", img.size, (0, 0, 0, 255))
+                        bg.paste(img, mask=img.split()[3])
+                        img = bg.convert("RGB")
                     # Scale to fill + center-crop (background-style)
                     scale = max(target_w / img.width, target_h / img.height)
                     nw = max(int(img.width * scale), target_w)
@@ -323,6 +331,15 @@ class GALSearch:
                     left = (nw - target_w) // 2
                     top  = (nh - target_h) // 2
                     img  = img.crop((left, top, left + target_w, top + target_h))
+                    # Reject washed-out / white-dominant assets — they ruin dark
+                    # game UIs. Mean channel luminance > 150 means the crop is
+                    # predominantly bright (white frames, light panels, etc.).
+                    from PIL import ImageStat as _PILStat
+                    _stat = _PILStat.Stat(img)
+                    _mean_lum = sum(_stat.mean[:3]) / min(len(_stat.mean), 3)
+                    if _mean_lum > 150:
+                        print(f"  [GAL] Background too bright (lum={_mean_lum:.0f}) — falling back to generation")
+                        return False
 
             target_path.parent.mkdir(parents=True, exist_ok=True)
             img.save(target_path, format="PNG")

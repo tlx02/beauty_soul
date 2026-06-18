@@ -83,29 +83,27 @@ else:
 
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 PASS0 = """\
-Analyse this HTML game (structure + game logic provided) and decide on the single best visual theme and layout.
+Analyse this HTML game and decide on the visual theme, colour palette, and layout.
 
-You will receive the HTML structure AND a truncated excerpt of the game's JavaScript so you can understand
-the actual mechanics — use this to make an informed aspect ratio decision.
+Palette source — follow strictly in priority order:
+1. If a cover image is provided above: extract the colour palette, art style, and surface texture DIRECTLY
+   from it. Do not invent or substitute colours — the cover is the authoritative visual identity.
+2. If no cover image: infer palette and style from the game name, genre, and mechanics.
 
-Consider: the game's genre, mechanics, tone, and target audience. Pick a specific, evocative theme
-(e.g. "deep-sea adventure", "retro neon arcade", "cozy autumn café", "minimalist zen garden",
-"space odyssey", "tropical island resort") — not a generic one like "colorful" or "fun".
-
-Also decide the best aspect ratio and container width for this game:
-- "9/16" portrait, max_width 480 — for most games: puzzle, card, casual, board, grid, or vertical games
-- "16/9" landscape, max_width 800 — only for side-scrollers, racing, or games that require a wide canvas
-Choose whichever best matches how the game is naturally played. Read the JS mechanics to decide.
+Decide the best aspect ratio and container width:
+- 9:16 portrait, max_width 480 — for most games: puzzle, card, casual, board, grid, vertical
+- 16:9 landscape, max_width 800 — only for side-scrollers, racing, or games requiring a wide canvas
+Read the JS mechanics to decide.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
   "theme": "<one concise theme name, 2-5 words>",
   "palette": ["<hex>", "<hex>", "<hex>", "<hex>"],
-  "mood": "<one sentence describing the visual mood and why it fits this game>",
+  "mood": "<one sentence describing the visual mood>",
   "font_style": "<e.g. rounded playful, sharp geometric, elegant serif, bold display>",
-  "aspect_w": <integer, e.g. 9>,
-  "aspect_h": <integer, e.g. 16>,
-  "max_width": <integer px, e.g. 480>
+  "aspect_w": <integer>,
+  "aspect_h": <integer>,
+  "max_width": <integer px>
 }"""
 
 STYLE_LOCK = """\
@@ -409,6 +407,7 @@ must feel intentional and part of this specific theme — not generic.
     - All game containers (boards, grids, canvas wrappers, buttons) must be centred — use margin:0 auto or align-self:center; never leave them left-aligned
     - Game elements (canvas, board, grid) must use max-width/max-height or % units to scale down and fit within the viewport — never use fixed pixel sizes that exceed the screen
     - Every game container that holds game objects (board, play-area, grid, reel window, lane container, tile area) MUST have overflow:hidden in its CSS rule — this is mandatory to prevent game elements from rendering outside the container bounds
+    - Repeating game mechanic elements (slot reels, grid cells, tube slots, card placeholders, sortable bins, match-3 tiles) MUST NOT have a white or near-white background when the game theme is dark or richly coloured. This includes semi-transparent white gradients such as `rgba(255,255,255,0.15)` or `linear-gradient(…rgba(255,255,255,…)…)` — these create a washed-out glassy look against dark backgrounds. Replace any white/light fill or white-tinted gradient with a semi-transparent dark overlay (e.g. rgba(0,0,0,0.3)–rgba(0,0,0,0.5)) or a deep theme colour, so the game background image shows through naturally.
     - HUD / score bar: should feel like a compact strip, leaving the large majority of the screen
       for gameplay. If the game only needs a few stats, prefer a single horizontal row of small
       badges over multiple stacked card panels. The HUD is a support element — not the focal point.
@@ -456,15 +455,30 @@ The game has:
 REQUIRED — always include all ten:
   1. background_home.png — full-screen atmospheric background for the TITLE screen.
      Rich and detailed — establishes the game world. Soft gradients or painterly illustration.
+     IMPORTANT: use soft ambient or diffuse lighting only — NO radial sunburst rays, NO lens flares,
+     NO glowing halos, NO dramatic light beams. Natural understated illustration, not theatrical.
+     Do NOT include in-game sprites, characters, or gameplay objects (e.g. balloons, coins, balls,
+     cards, tubes) — those must only exist as actual game elements on top, not baked into the art.
   2. background_game.png — background for the GAMEPLAY screen.
-     Same palette as background_home.png but darker (30-40% darker) and more desaturated.
+     SAME scene/setting/environment as background_home.png — if home is a kitchen, game is that
+     same kitchen but with dimmer lighting; if home is a jungle, game is that same jungle at dusk.
+     Same location, same objects, same overall atmosphere — just darker (30-40% darker) and more
+     desaturated to reduce visual noise during gameplay.
      IMPORTANT: "darker" must not result in near-black — the background must still read as a
      recognisable colour (muted blue, dark green, warm brown, etc.), never close to pure black.
      If the home background is already moody or dark, reduce saturation and detail instead of
      darkening further. The goal is reduced visual noise, not blackness.
      Minimal detail — must not compete with game elements. Subtle texture or gradient only.
+     ALSO: must not have large areas of near-white (rgb all >220) — even sky or bright-theme
+     backgrounds should use a clearly coloured mid-tone (sky blue, not horizon white).
+     Do NOT include in-game sprites, characters, or gameplay objects — background scenery only.
   3. background_gameover.png — background for the GAME OVER screen.
-     Dramatic darker variant of background_home.png. Slightly ominous or reflective mood.
+     SAME environment as background_home.png — same sky, same scene, same color palette family.
+     Make it darker, more shadowed, and more desaturated than the game screen — but SAME HUE.
+     If home is blue sky, gameover is darker blue sky. If home is a forest, gameover is that same
+     forest at night. NEVER change to a completely different color (e.g. purple starfield when home
+     is blue sky). Just add darkness, shadow, subtle mist or overcast — no hue shift to purple/red.
+     Slightly reflective or melancholic mood through lighting, not through palette change.
   4. game_preview.png — gameplay preview on title screen. Key game elements mid-play, 1:1 ratio,
      transparent background, no text or UI chrome.
   5. title.png — styled game title logo. Bold themed lettering, transparent background.
@@ -702,7 +716,9 @@ PASS5 = """\
 You are a QA engineer doing a final playability pass on a fully assembled HTML game.
 The game has 3 screens: screen-home (title), screen-game (gameplay), screen-gameover (game over).
 
-Fix the following classes of bugs and visual issues. Do not change game logic or asset filenames/paths:
+Fix ONLY the following JS/structure bugs. Do NOT touch any <style> blocks, CSS, class names,
+inline styles, or visual layout — those were set by earlier passes and must not be changed.
+Do not change game logic or asset filenames/paths.
 
 1. SCREEN ROUTING CORRECTNESS
    a) On load — static HTML: ensure the screen-home div has class="screen active" in the HTML
@@ -780,96 +796,6 @@ Fix the following classes of bugs and visual issues. Do not change game logic or
    Replace all inline `onclick="..."` on game buttons with `onpointerdown="..."` for consistent
    low-latency response on both mobile and desktop. The only exception is `<a>` links.
    This applies to all buttons: Play Again, Restart, Home, Next Level, etc.
-
-9. VISUAL LAYOUT AUDIT — self-critique each screen and fix what looks wrong.
-   For each screen below, ask yourself: "Does this look like a real polished mobile game, or like
-   an AI-generated template?" Then fix the CSS and HTML to close the gap. You may edit <style>
-   blocks and tweak element structure (class names, wrapper divs, inline styles) — but do NOT
-   change game logic, asset filenames, or element IDs.
-
-   TITLE SCREEN (#screen-home):
-   - Is the title image visually dominant (largest element)? If it is tiny or same size as
-     other elements, increase its max-width to 70–80% of the container.
-   - Is the preview image clearly a "gameplay preview"? Should be ~35–45% container width.
-   - Is the PLAY button obviously the primary CTA? Should be larger than secondary elements.
-   - Are the three elements spread generously across the full screen height? If they cluster
-     at the top or center, add justify-content: space-evenly to #screen-home.
-   - Is there any leftover raw text (game name as plain <h1>/<h2>, or a small text badge/pill
-     element) alongside the title image? If a text element shows the game's name and the title
-     image already shows it, the text element is redundant — hide it with display:none.
-   - Is there any plain white or solid-coloured rectangular element that has no content and
-     no background-image? This is an orphaned container from the original HTML. Make it
-     background: transparent so it doesn't appear as a white block over the background.
-
-   GAME SCREEN (#screen-game):
-   - Is the score/HUD visible and legible without squinting? If font-size is under 0.9em or
-     the score element has no background panel, increase its visual prominence.
-   - Count every strip above the game board: topbar row, score/stat row, any secondary info
-     row (moves counter, combo bar, mana strip). If their combined height rivals or exceeds
-     the game board/canvas height, the HUD is dominating — this must be fixed. Merge secondary
-     rows into the main score row, reduce padding on existing rows, or remove redundant stat
-     displays. The game board must be the single tallest element on the screen.
-   - Do #btn-home-game and #btn-pause-game feel like small secondary controls, or do they
-     visually compete with the game content? If they look dominant, reduce them.
-   - Are resource/progress bars (health, mana, energy, stamina) clearly readable — thick enough
-     to communicate state at a glance? A hairline bar is not useful to a player.
-   - Does the game board/grid/canvas fill a natural proportion of the screen (~60–75% height)?
-     If it is tiny (under 40%) or overflows its container, fix the sizing.
-   - Does anything overflow its container? Add overflow:hidden where needed.
-   - Are there any orphaned visual artifacts — elements with visible rounded-corner borders,
-     faint background shapes, or placeholder ovals/capsules/rectangles that have no game
-     content and no interactive purpose? These are often leftover from the original HTML
-     before it was restructured. Hide them with display:none. Common locations: below the
-     game board, beside the topbar, or as empty floats around the play area.
-   - Pause overlay: `#pause-overlay` must use `position: absolute; inset: 0` (NOT fixed — fixed
-     makes the overlay cover the full desktop viewport and causes percentage widths on the pause
-     card to become enormous). Ensure `#pause-overlay` has `display: flex; align-items: center;
-     justify-content: center` when active. `#pause-card` must be a plain flex child (NOT
-     `position: absolute` or `position: fixed`) with `width: 85%; max-width: 360px`. If the card
-     currently has `position: absolute; top: 50%; left: 50%`, remove that and let the flex parent
-     center it. If `max-width` is missing or unconstrained (e.g. `max-width: 90%`), add
-     `max-width: 360px`.
-   - HUD consolidation: If there are more than two horizontal rows of HUD elements stacked above
-     the game board, and their combined height consumes more than ~25% of the screen, consolidate
-     them. Any plain text-only row (no background-image panel) that contains only counters or
-     action labels should be merged into the adjacent HUD row rather than occupying its own strip.
-     Navigation buttons (home, pause) belong in the topbar row, not in a separate row.
-     EXCEPTION: do NOT merge or remove any row that has a `background-image` applied to it —
-     that image was intentionally wired in a previous pass and must stay on its target element.
-   - Play area fills available height: The container directly holding game elements MUST use
-     `flex: 1; min-height: 0`. Additionally, if a DOM game board/grid has a fixed pixel CSS size
-     that leaves large empty margins above and below it, replace the fixed CSS dimensions with
-     container-relative sizing (percentage widths, `aspect-ratio`, or JS that reads
-     `container.offsetWidth`/`offsetHeight` after the screen is shown via requestAnimationFrame).
-     EXCEPTION: do NOT modify `<canvas>` element `width`/`height` attributes or the JS that sets
-     them — canvas pixel dimensions define the coordinate system and must not be changed via CSS.
-   - Game mechanic container backgrounds: Repeating game element containers (reels, grid cells,
-     sortable slots, etc.) must not have a white or near-white background when the game theme is
-     dark or richly coloured. A white fill breaks immersion against a dark background. Replace
-     with a semi-transparent or theme-appropriate dark fill.
-   - Z-index stacking: Decorative background elements (floating shapes, scattered 3D pieces,
-     ambient particles — purely visual, not interactive) must have z-index: 0. If any such
-     element appears visually on top of a UI panel, overlay, or button, fix it by setting
-     z-index: 0 on the decorative element (and z-index: 9999 on #pause-overlay if not already set).
-     The stacking order must always be: decorations (0) → game board (1) → HUD (10) →
-     popups (100) → pause overlay (9999).
-
-   GAME-OVER SCREEN (#screen-gameover):
-   - Is the primary score/result displayed at LARGE size — clearly bigger than secondary stats?
-     If all stats are the same font-size, make the primary score at least 2× larger.
-   - Does the screen feel emotionally impactful (celebratory win or dramatic loss), or does
-     it look like a plain data table? If bland: bold the palette, add the theme accent colour
-     to the primary score, increase spacing.
-   - Is there visible, prominent empty space between the score area and the buttons?
-     If buttons are crammed directly under the stats, add margin or padding.
-   - Are there any plain unstyled text buttons that should look like the theme? Style them.
-
-   GLOBAL:
-   - Any element with a `background-image` panel that has visible browser-default background-color
-     or border bleeding through: remove that background-color/border.
-   - Any button that still shows default browser button styling (grey background, system font,
-     visible border): apply the game's theme styling to it.
-   - Text that is unreadable against its background: add text-shadow or change colour.
 
 Return ONLY the complete modified HTML. No explanation."""
 
@@ -1460,6 +1386,12 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
                 desc = f"Art style: {genre_direction}. {desc}"
             else:
                 desc = f"{desc} Genre-specific style: {genre_direction}."
+        # Universal quality constraint: natural, understated game art
+        desc += (
+            " Clean understated mobile game art with soft natural lighting. "
+            "Avoid over-the-top bloom, dramatic light rays, neon particle storms, "
+            "or heavy cinematic vignette. Simple, grounded, and polished."
+        )
         if transparent:
             desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
         return desc, transparent
@@ -1787,24 +1719,29 @@ def beautify(src_dir: Path) -> bool:
     # ── Pass 0: determine visual theme + screen size ─────────────────────────
     theme_json = prog.get("theme_json")
     if not theme_json:
-        print("    → Pass 0: determine visual theme + screen size (Trinity Protocol)")
+        print(f"    → Pass 0: determine visual theme + screen size ({'cover extract' if cover_b64 else 'Trinity Protocol'})")
         pass0_input = game_context_for_pass0(html)
-        pass0_problem = (
-            f"Analyse this HTML game and decide the single best visual theme, layout, and aspect ratio.\n\n"
-            f"Game structure and JS mechanics:\n{pass0_input}\n\n"
-            f"Return ONLY valid JSON (no markdown, no explanation):\n"
-            f'{{"theme":"<2-5 word theme>","palette":["<hex>","<hex>","<hex>","<hex>"],'
-            f'"mood":"<one sentence>","font_style":"<e.g. rounded playful>","aspect_w":<int>,"aspect_h":<int>,"max_width":<int>}}\n\n'
-            f"Aspect ratio rules: 9:16 portrait (max_width 480) for most games. "
-            f"16:9 landscape (max_width 800) ONLY for side-scrollers, racing, or wide-canvas games."
-        )
-        r = tp_analyze(
-            problem=pass0_problem,
-            fallback_system=PASS0,
-            fallback_html=pass0_input,
-            label="pass0",
-            max_tokens=1024,
-        )
+        if cover_b64:
+            # Cover image present — extract palette/style/texture directly from it
+            r = call_llm_vision(PASS0, pass0_input, cover_b64, "pass0", max_tokens=1024)
+        else:
+            pass0_problem = (
+                f"Analyse this HTML game and decide the visual theme, colour palette, and layout.\n\n"
+                f"Derive the palette and style from the game name, genre, and mechanics.\n\n"
+                f"Game structure and JS mechanics:\n{pass0_input}\n\n"
+                f"Return ONLY valid JSON (no markdown, no explanation):\n"
+                f'{{"theme":"<2-5 word theme>","palette":["<hex>","<hex>","<hex>","<hex>"],'
+                f'"mood":"<one sentence>","font_style":"<e.g. rounded playful>","aspect_w":<int>,"aspect_h":<int>,"max_width":<int>}}\n\n'
+                f"Aspect ratio rules: 9:16 portrait (max_width 480) for most games. "
+                f"16:9 landscape (max_width 800) ONLY for side-scrollers, racing, or wide-canvas games."
+            )
+            r = tp_analyze(
+                problem=pass0_problem,
+                fallback_system=PASS0,
+                fallback_html=pass0_input,
+                label="pass0",
+                max_tokens=1024,
+            )
         if r:
             try:
                 parsed = _extract_json_from_solve(r)
