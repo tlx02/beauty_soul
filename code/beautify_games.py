@@ -68,6 +68,19 @@ client = OpenAI(
     default_headers={"X-Title": "800 Games Beautifier"}
 )
 
+# ─── GAL (Game Asset Library) search ──────────────────────────────────────────
+from gal_search import GALSearch as _GALSearch
+_GAL_INDEX_PATH = config.get("gal_index_path") or _os.environ.get("GAL_INDEX_PATH", "")
+_gal_search: _GALSearch | None = None
+if _GAL_INDEX_PATH:
+    _gal_search = _GALSearch(
+        _GAL_INDEX_PATH,
+        top_k=config.get("gal_top_k", 10),
+        threshold=config.get("gal_threshold", 0.0),
+    )
+else:
+    print("  [GAL] gal_index_path not set — GAL disabled (AI generation only)")
+
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 PASS0 = """\
 Analyse this HTML game (structure + game logic provided) and decide on the single best visual theme and layout.
@@ -1401,9 +1414,22 @@ def gen_image(description: str, out: Path, transparent: bool = False) -> bool:
         return False
 
 def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
-                              style_lock: dict = None, genre_direction: str = "") -> set:
-    """Generate images concurrently. Returns set of failed filenames."""
+                              style_lock: dict = None, genre_direction: str = "",
+                              gal_search=None) -> set:
+    """Generate images concurrently. Returns set of failed filenames.
+
+    If gal_search is provided, each image is first looked up in the GAL library.
+    On a hit the asset is downloaded and resized; generation is skipped.
+    On a miss (or any GAL error) the normal AI generation path runs unchanged.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Thread-safe counters and dedup tracking for GAL
+    _gal_hits   = [0]
+    _gal_misses = [0]
+    _gal_used_ids: set[str] = set()   # prevent the same GAL asset being used twice
+    import threading as _threading
+    _gal_lock = _threading.Lock()
 
     def _build_desc(img: dict) -> tuple[str, bool]:
         fname = img["filename"]
@@ -1451,6 +1477,18 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
         except Exception as e:
             print(f"    ⚠  _post_process {path.name}: {e}")
 
+    def _gal_llm_call(prompt: str) -> str | None:
+        """Thin wrapper so gal_search can call the pipeline's LLM client."""
+        return call_llm(
+            "You are a precise asset selector. Reply with only a single integer.",
+            prompt,
+            "gal-pick",
+            max_tokens=8,
+        )
+
+    # fname → gal_id for hit logging (populated in _gen_one, read in result loop)
+    _gal_hit_ids: dict[str, str] = {}
+
     def _gen_one(img: dict) -> tuple[str, bool]:
         fname = img["filename"]
         out_path = img_dir / fname
@@ -1460,6 +1498,41 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
             # Manifest w/h is source of truth — crop padding + resize cached file if needed
             _post_process(out_path, target_w, target_h)
             return fname, True
+
+        # ── GAL search (try library asset before generating) ──────────────────
+        if gal_search and gal_search.enabled:
+            try:
+                gal_asset = gal_search.find_image(img, style_lock, _gal_llm_call)
+                if gal_asset:
+                    gal_id = gal_asset.get("id", "?")
+                    # Skip if already used for another asset (dedup — ensures variety)
+                    with _gal_lock:
+                        already_used = gal_id in _gal_used_ids
+                        if not already_used:
+                            _gal_used_ids.add(gal_id)
+                    if already_used:
+                        gal_asset = None
+                if gal_asset:
+                    gal_id = gal_asset.get("id", "?")
+                    is_bg = fname.startswith("background")
+                    is_transparent = img.get("transparent", not is_bg)
+                    ok = gal_search.download_image(
+                        gal_asset, out_path, target_w, target_h,
+                        is_transparent=is_transparent,
+                    )
+                    if ok:
+                        with _gal_lock:
+                            _gal_hits[0] += 1
+                            _gal_hit_ids[fname] = gal_id
+                        # GAL download already resized; _post_process for final cleanup
+                        _post_process(out_path, target_w, target_h)
+                        return fname, True
+            except Exception as gal_exc:
+                print(f"    ⚠  GAL search error for {fname}: {gal_exc} — falling back to generation")
+            with _gal_lock:
+                _gal_misses[0] += 1
+
+        # ── AI generation (fallback or GAL disabled) ──────────────────────────
         desc, transparent = _build_desc(img)
         ok = gen_image(desc, out_path, transparent=transparent)
         if not ok:
@@ -1480,12 +1553,19 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
                 if not ok:
                     failed.add(fname)
                     print(f"    ✗  image {fname}: failed after retry")
+                elif fname in _gal_hit_ids:
+                    print(f"    ✓  image {fname} [GAL: {_gal_hit_ids[fname]}]")
                 else:
                     print(f"    ✓  image {fname}")
             except Exception as e:
                 fname = img["filename"]
                 failed.add(fname)
                 print(f"    ✗  image {fname}: exception — {e}")
+
+    # Report GAL hit rate
+    total = _gal_hits[0] + _gal_misses[0]
+    if gal_search and total > 0:
+        print(f"    {gal_search.stats_line(_gal_hits[0], total)}")
 
     # Final verification: re-run _post_process on all transparent images to catch any
     # silent failures during parallel generation (thread-safety edge cases in PIL save)
@@ -1976,13 +2056,15 @@ def beautify(src_dir: Path) -> bool:
         genre_direction = config.get("genre_art_direction", {}).get(
             game_meta.get("genre", "misc") if game_meta else "misc", ""
         )
-        print(f"    → Pass 4b: generating {len(manifest.get('images', []))} images (parallel, max 4 workers)")
+        gal_label = " + GAL library" if (_gal_search and _gal_search.enabled) else ""
+        print(f"    → Pass 4b: generating {len(manifest.get('images', []))} images (parallel, max 4 workers{gal_label})")
         failed_images = generate_images_parallel(
             manifest.get("images", []),
             img_dir,
             max_workers=4,
             style_lock=style_lock,
             genre_direction=genre_direction,
+            gal_search=_gal_search,
         )
         if failed_images:
             print(f"    ⚠  {len(failed_images)} image(s) failed to generate: {failed_images}")

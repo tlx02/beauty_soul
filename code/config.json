@@ -4,6 +4,9 @@
   "llm_model": "anthropic/claude-sonnet-4-5",
   "image_model": "openai/gpt-5-image",
   "max_tokens": 32768,
+  "gal_index_path": "/Users/mozat/dev/stylepedia_ai/GAL/index.json",
+  "gal_top_k": 10,
+  "gal_threshold": 0.0,
   "weights": {
     "size_score":        20,
     "has_game_loop":     15,
