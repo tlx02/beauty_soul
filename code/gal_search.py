@@ -261,9 +261,13 @@ class GALSearch:
 
         try:
             result = llm_call_fn("\n".join(lines)) or ""
-            m = re.search(r"\b(\d+)\b", result)
-            if m:
-                num = int(m.group(1))
+            # Use the LAST standalone integer in the response — the LLM may explain first,
+            # then give its answer, so the last number is the actual selection (or 0 = reject).
+            nums = re.findall(r"\b(\d+)\b", result)
+            if nums:
+                num = int(nums[-1])
+                if num == 0:
+                    return None
                 if 1 <= num <= len(candidates):
                     return candidates[num - 1]
         except Exception:
@@ -307,8 +311,13 @@ class GALSearch:
 
             if target_w and target_h:
                 if is_transparent:
-                    # Scale to fit within target (preserve aspect ratio)
-                    img.thumbnail((target_w, target_h), PILImage.LANCZOS)
+                    # Scale to fit within target (preserve aspect ratio).
+                    # thumbnail() only shrinks — compute ratio manually so small assets
+                    # are also upscaled to fill the target slot properly.
+                    ratio = min(target_w / img.width, target_h / img.height)
+                    new_w = max(1, int(img.width * ratio))
+                    new_h = max(1, int(img.height * ratio))
+                    img = img.resize((new_w, new_h), PILImage.LANCZOS)
                     canvas = PILImage.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
                     x = (target_w - img.width) // 2
                     y = (target_h - img.height) // 2

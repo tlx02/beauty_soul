@@ -1536,7 +1536,7 @@ def gen_audio(description: str, duration: float, out: Path) -> bool:
 
 
 # ─── Playwright smoke test ─────────────────────────────────────────────────────
-def smoke_test(out_dir: Path) -> dict:
+def smoke_test(out_dir: Path, max_width: int = 480, screen_height: int = 854) -> dict:
     """Run the final game in headless Chromium. Returns dict with pass/fail + JS errors.
     Checks: home screen active on load, PLAY button navigates to game, no JS errors for 3s."""
     try:
@@ -1552,7 +1552,7 @@ def smoke_test(out_dir: Path) -> dict:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": 480, "height": 854})
+            page = browser.new_page(viewport={"width": max_width, "height": screen_height})
             page.on("pageerror", lambda e: js_errors.append(str(e)))
             page.goto(f"file://{out_dir}/index.html", wait_until="domcontentloaded")
             page.wait_for_timeout(500)
@@ -1585,7 +1585,7 @@ def smoke_test(out_dir: Path) -> dict:
     }
 
 
-def screenshot_screens(out_dir: Path, html: str) -> dict:
+def screenshot_screens(out_dir: Path, html: str, max_width: int = 480, screen_height: int = 844) -> dict:
     """Render the game in headless Chromium and capture screenshots of all 3 screens.
     Writes a temporary file so the screenshots reflect the current in-memory HTML.
     Returns dict with keys: home_b64, game_b64, gameover_b64 (base64 PNG strings).
@@ -1603,7 +1603,7 @@ def screenshot_screens(out_dir: Path, html: str) -> dict:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page = browser.new_page(viewport={"width": max_width, "height": screen_height})
             page.on("pageerror", lambda e: None)  # suppress errors during capture
             page.goto(f"file://{tmp_path}", wait_until="domcontentloaded")
             page.wait_for_timeout(800)
@@ -1974,7 +1974,7 @@ def beautify(src_dir: Path) -> bool:
     manifest = manifest or prog.get("manifest")
 
     # ── Pass 4d: wire assets into HTML (before image generation) ─────────────
-    if not prog.get("pass4_wire") and manifest:
+    if not prog.get("pass4_wire") and manifest and not prog.get("pass1_failed"):
         print("    → Pass 4d: wire assets into HTML")
         prompt = PASS4D.format(manifest=json.dumps(manifest, indent=2), aspect_w=aspect_w, aspect_h=aspect_h, max_width=max_width)
         r = call_llm(prompt, html, "pass4d")
@@ -2030,7 +2030,7 @@ def beautify(src_dir: Path) -> bool:
         va_done = False
         for va_iter in range(MAX_VA_ITERS):
             iter_label = f"{va_iter+1}/{MAX_VA_ITERS}"
-            screenshots = screenshot_screens(out_dir, html)
+            screenshots = screenshot_screens(out_dir, html, max_width=max_width, screen_height=screen_height)
             if not screenshots:
                 print("    ○ visual audit skipped (Playwright unavailable)")
                 va_done = True
@@ -2132,7 +2132,7 @@ def beautify(src_dir: Path) -> bool:
         print("    → Pass 6: smoke test")
         # Write current html to index.html first so smoke_test can load it
         (out_dir / "index.html").write_text(html, encoding="utf-8")
-        smoke_result = smoke_test(out_dir)
+        smoke_result = smoke_test(out_dir, max_width=max_width, screen_height=screen_height)
         prog["smoke_result"] = smoke_result
         if smoke_result.get("skip_reason"):
             print(f"    ○ smoke test skipped: {smoke_result['skip_reason']}")
@@ -2160,7 +2160,7 @@ def beautify(src_dir: Path) -> bool:
                 if r:
                     html = r
                     (out_dir / "index.html").write_text(html, encoding="utf-8")
-                    smoke_result = smoke_test(out_dir)
+                    smoke_result = smoke_test(out_dir, max_width=max_width, screen_height=screen_height)
                     prog["smoke_result"] = smoke_result
                     if smoke_result["passed"]:
                         print(f"    ✓ smoke test passed after retry {attempt+1}")
