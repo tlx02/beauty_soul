@@ -377,8 +377,12 @@ must feel intentional and part of this specific theme — not generic.
 
   #screen-game (Gameplay):
     - Do NOT override background or add decorative chrome that competes with gameplay
-    - Use justify-content: space-evenly so content is distributed across the full screen height —
-      never justify-content: flex-start which clusters everything at the top
+    - Use justify-content: flex-start so elements stack from the top; the game board fills remaining space naturally
+    - The main game board / play area / canvas container (the primary gameplay element, usually the
+      largest block on screen) MUST have flex: 1 in its CSS so it fills all vertical space that the
+      HUD does not occupy. Also add max-height: calc(100dvh - 200px) as an overflow safety cap.
+      This is mandatory — a HUD is added in a later pass, and without flex:1 on the board it will
+      push the board off-screen or force the board to overlap the HUD.
     - #btn-home-game and #btn-pause-game: style as small unobtrusive icon buttons — sized to feel
       like secondary controls, not primary game elements. They should be visually compact so
       gameplay content dominates the screen. Size proportionally to the game's HUD bar — if the
@@ -1172,6 +1176,34 @@ def fix_css_issues(html: str) -> str:
             seen_game_rule = True
         clean_blocks.append(block)
     css = ''.join(clean_blocks)
+
+    # 11. Replace justify-content: space-evenly in #screen-game with flex-start.
+    #     space-evenly distributes fixed-height blocks evenly; when Pass4D adds HUD panels the board
+    #     overflows. flex-start + flex:1 on the board fills remaining space correctly.
+    css = re.sub(
+        r'(#screen-game\s*\{[^}]*?)justify-content\s*:\s*space-evenly\s*;',
+        r'\1justify-content: flex-start;',
+        css, flags=re.DOTALL
+    )
+
+    # 12. Game board flex-fill: elements with aspect-ratio:1 and width:100% that are not
+    #     absolutely positioned are almost always the main game board (not cells/tiles).
+    #     Adding flex:1 + max-height lets them fill remaining screen space after HUD elements.
+    def _flex_fill_board(m):
+        block = m.group(0)
+        if not re.search(r'width\s*:\s*100%', block):
+            return block
+        if re.search(r'position\s*:\s*(absolute|fixed)', block):
+            return block
+        if re.search(r'\bflex\s*:\s*1\b', block):
+            return block
+        return block.rstrip()[:-1].rstrip() + '\n  flex: 1;\n  max-height: calc(100dvh - 200px);\n}'
+
+    css = re.sub(
+        r'[^{/\n][^{]*\{[^}]*aspect-ratio\s*:\s*1[\s;/}][^}]*\}',
+        _flex_fill_board,
+        css, flags=re.DOTALL
+    )
 
     # Always append structural guardrail last — only once (fix_css_issues runs after Pass3, Pass4D, and Pass5)
     if "structural guardrail" not in css:
@@ -2094,6 +2126,11 @@ def beautify(src_dir: Path) -> bool:
             )
             r2 = call_llm(fix_prompt, html, f"visual-audit-fix-{va_iter+1}", max_tokens=65536)
             if r2:
+                # Validate it's actual HTML — the LLM sometimes returns explanatory text instead
+                if "<html" not in r2.lower() and "<!doctype" not in r2.lower():
+                    print(f"    ⚠  visual audit fix returned non-HTML text — keeping current HTML")
+                    va_done = True
+                    break
                 html = fix_css_issues(r2)
                 (out_dir / "index_pass_va.html").write_text(html, encoding="utf-8")
             else:
