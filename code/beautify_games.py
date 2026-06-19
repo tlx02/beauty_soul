@@ -454,11 +454,10 @@ The game has:
 
 REQUIRED — always include all ten:
   1. background_home.png — full-screen atmospheric background for the TITLE screen.
-     COMPOSITION: two-zone layout. CENTER (inner 50%): keep clean and near-flat — subtle gradient,
-     single-tone surface, or gently blurred environment. No sharp details, no objects, no patterns
-     in the center. EDGES/CORNERS (outer 25% border): may carry richer environmental detail —
-     architecture, foliage, props — acting as a decorative frame. This is mandatory: a title logo,
-     preview image, and PLAY button will be layered over the center and must read clearly.
+     Must feel like a backdrop, not a painting competing for attention. Keep it soft, low-contrast,
+     and muted — the kind of environment art that makes the foreground elements (title, buttons)
+     immediately pop. Avoid sharp edges, high-frequency detail, and saturated focal points.
+     Think: gently blurred or softly painted atmosphere, not a detailed illustration.
      IMPORTANT: use soft ambient or diffuse lighting only — NO radial sunburst rays, NO lens flares,
      NO glowing halos, NO dramatic light beams. Natural understated illustration, not theatrical.
      Background must be PURE ENVIRONMENT ONLY — sky, ground, architecture, trees, furniture, nature.
@@ -468,12 +467,9 @@ REQUIRED — always include all ten:
   2. background_game.png — background for the GAMEPLAY screen.
      SAME scene/setting/environment as background_home.png — if home is a kitchen, game is that
      same kitchen but with dimmer lighting; if home is a jungle, game is that same jungle at dusk.
-     COMPOSITION (MANDATORY): inner 60% × 60% rectangle = visually flat and clear.
-     Ground/terrain MUST be a low flat strip at the very bottom (max 20% of height) — no hills
-     or peaks rising toward center. Side props (trees, walls) stay within left/right 20% strips.
-     Top details (sky elements, canopy) stay within the top 20% strip. Scattered particles or
-     decorative shapes only in the outer border — none in the central rectangle.
-     Game elements render in the center; a cluttered center makes them disappear.
+     This background must recede completely — it should feel like a subtle atmospheric wash, not
+     a scene. Heavily desaturated, low contrast, soft and hazy. Game elements must visually dominate;
+     the background should be almost unnoticeable except as a colour mood.
      Darker (30-40%) and more desaturated than background_home.png.
      IMPORTANT: "darker" must not result in near-black — still read as a recognisable colour.
      ALSO: must not have large areas of near-white (rgb all >220).
@@ -481,7 +477,6 @@ REQUIRED — always include all ten:
      Do NOT include any gameplay objects, decorative gems/stars/confetti — scenery only.
   3. background_gameover.png — background for the GAME OVER screen.
      SAME environment as background_home.png — same sky, same scene, same color palette family.
-     COMPOSITION: same two-zone rule — clean center, detail only at edges.
      Make it darker, more shadowed, and more desaturated than the game screen — but SAME HUE.
      If home is blue sky, gameover is darker blue sky. If home is a forest, gameover is that same
      forest at night. NEVER change to a completely different color (e.g. purple starfield when home
@@ -1400,24 +1395,15 @@ def generate_images_parallel(images: list, img_dir: Path, max_workers: int = 4,
             "Avoid over-the-top bloom, dramatic light rays, neon particle storms, "
             "or heavy cinematic vignette. Simple, grounded, and polished."
         )
-        # Background-specific: enforce clear-center / framed-edge composition
+        # Background-specific: must recede, not compete
         if is_bg:
             desc += (
-                " STRICT COMPOSITION RULE — mandatory for all background images:"
-                " Imagine the image divided into a clean inner rectangle (center 60% wide × 60% tall)"
-                " and an outer border frame (the remaining ~20% strip on all four sides)."
-                " The INNER RECTANGLE must be near-uniform: a single flat colour, a smooth"
-                " gradient, or the faintest low-contrast atmospheric haze. Nothing detailed,"
-                " no objects, no focal points, no patterns inside this zone."
-                " All visual interest lives in the OUTER BORDER FRAME only:"
-                " — Top strip: sky details, clouds, foliage canopy, architectural tops."
-                " — Bottom strip: ground, grass, floor — kept as a LOW FLAT STRIP, max 20% height."
-                "   Ground/terrain must NOT rise into the center as hills or peaks."
-                " — Left/right strips: trees, walls, pillars, side props."
-                " Scattered particles, confetti, or small decorative shapes must also stay"
-                " within the outer border — none in the inner rectangle."
-                " The clear inner zone is non-negotiable: game pieces and UI will composite"
-                " directly over it and must be legible without any shadow or stroke."
+                " This is a background — it must recede visually and never compete with the"
+                " game elements or UI layered on top. Keep saturation low, contrast soft, and"
+                " detail subtle. No sharp focal points, no vivid colour pops, no busy textures."
+                " The background should feel like a quiet atmospheric mood, not a scene that"
+                " draws the eye. If someone glances at the screen, their attention should go"
+                " instantly to the game elements, not the background."
             )
         if transparent:
             desc += " Isolated on a fully transparent background — no white fill, no background color, PNG with alpha channel."
