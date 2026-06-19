@@ -457,8 +457,10 @@ REQUIRED — always include all ten:
      Rich and detailed — establishes the game world. Soft gradients or painterly illustration.
      IMPORTANT: use soft ambient or diffuse lighting only — NO radial sunburst rays, NO lens flares,
      NO glowing halos, NO dramatic light beams. Natural understated illustration, not theatrical.
-     Do NOT include in-game sprites, characters, or gameplay objects (e.g. balloons, coins, balls,
-     cards, tubes) — those must only exist as actual game elements on top, not baked into the art.
+     Background must be PURE ENVIRONMENT ONLY — sky, ground, architecture, trees, furniture, nature.
+     Do NOT include ANY floating, scattered, or suspended objects: no gems, stars, diamonds, coins,
+     confetti, crystals, ribbons, particles, fruit, eggs, or decorative shapes hovering in the scene.
+     Gameplay objects (balloons, balls, cards, tubes) especially must never be baked into the art.
   2. background_game.png — background for the GAMEPLAY screen.
      SAME scene/setting/environment as background_home.png — if home is a kitchen, game is that
      same kitchen but with dimmer lighting; if home is a jungle, game is that same jungle at dusk.
@@ -471,7 +473,8 @@ REQUIRED — always include all ten:
      Minimal detail — must not compete with game elements. Subtle texture or gradient only.
      ALSO: must not have large areas of near-white (rgb all >220) — even sky or bright-theme
      backgrounds should use a clearly coloured mid-tone (sky blue, not horizon white).
-     Do NOT include in-game sprites, characters, or gameplay objects — background scenery only.
+     Background must be PURE ENVIRONMENT — no floating objects, no scattered shapes, no particles.
+     Do NOT include any gameplay objects, decorative gems/stars/confetti — scenery only.
   3. background_gameover.png — background for the GAME OVER screen.
      SAME environment as background_home.png — same sky, same scene, same color palette family.
      Make it darker, more shadowed, and more desaturated than the game screen — but SAME HUE.
@@ -1812,6 +1815,8 @@ def beautify(src_dir: Path) -> bool:
     if not prog.get("pass2"):
         print("    → Pass 2: fix game logic")
         r = call_llm(PASS2, html, "pass2")
+        if not r:
+            r = call_llm(PASS2, html, "pass2-retry")
         if r:
             html = r
             # JS syntax check — catch syntax errors introduced by Pass 2
