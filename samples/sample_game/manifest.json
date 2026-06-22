@@ -1,0 +1,13 @@
+{
+  "schema_version": "soul-input/v1",
+  "request_id": "sample-order-001",
+  "game_slug": "patty_stack__beauty_soul_sample",
+  "game_name": "Patty Stack",
+  "vertical": "qsr",
+  "locale": "en-SG",
+  "brand": {
+    "name": "Acme Burgers",
+    "description": "Fast-food brand for a quick lunch crowd.",
+    "logo": "brand/logo.png"
+  }
+}

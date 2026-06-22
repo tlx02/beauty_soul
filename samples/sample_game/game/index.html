@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Patty Stack</title>
+<style>
+  html,body{margin:0;height:100%;background:#1c1c22;font-family:system-ui,sans-serif;color:#eee}
+  #app{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%}
+  .screen{display:none;text-align:center}
+  .screen.active{display:block}
+  button{font-size:18px;padding:12px 24px;border:0;border-radius:10px;background:#f5a623;color:#222;cursor:pointer}
+  #stack img{display:block;width:96px;margin:2px auto}
+  #score{font-size:22px;margin:12px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="screen-home" class="screen active">
+    <h1>Patty Stack</h1>
+    <button id="btn-start">Start</button>
+  </div>
+  <div id="screen-game" class="screen">
+    <div id="score">Patties: 0</div>
+    <div id="stack"></div>
+    <button id="btn-add">Stack a patty</button>
+  </div>
+</div>
+<script>
+  // Dynamic asset array — this is exactly the pattern that caused the historical
+  // PNG-404 bug: the sprite path lives in JS, not a static <img src>. beauty_soul
+  // must carry assets/sprite_patty.png through to the output zip (spec §7.3 / §16-8).
+  const INGREDIENTS = [{ name: "patty", src: "assets/sprite_patty.png" }];
+  let score = 0;
+  const show = id => document.querySelectorAll('.screen')
+      .forEach(s => s.classList.toggle('active', s.id === id));
+  document.getElementById('btn-start').onclick = () => show('screen-game');
+  document.getElementById('btn-add').onclick = () => {
+    score++;
+    document.getElementById('score').textContent = 'Patties: ' + score;
+    const img = document.createElement('img');
+    img.src = INGREDIENTS[0].src;
+    img.alt = 'patty';
+    document.getElementById('stack').prepend(img);
+  };
+</script>
+</body>
+</html>
