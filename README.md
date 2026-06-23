@@ -97,6 +97,63 @@ python3 code/beautify_games.py --pilot 30 --offset 20
 
 ---
 
+## HTTP Service (KiX integration)
+
+`beauty_soul.server:app` is a FastAPI service that wraps the pipeline for KiX's
+`soul-worker`. It is **zip-in / zip-out**: POST a KiX standard input bundle, get
+a beautified, fully-runnable game zip back. See the interface spec
+`03-beauty_soul-HTTP接口需求.md` for the full contract.
+
+```bash
+# install service deps (already in pyproject dependencies)
+pip install -e .
+python -m playwright install chromium     # for visual audit + smoke test
+
+# run the service
+export OPENROUTER_API_KEY=sk-or-...        # required; missing key -> /v1/beautify fails fast
+export ELEVENLABS_API_KEY=...              # optional; absent -> sound skipped, no failure
+uvicorn beauty_soul.server:app --host 0.0.0.0 --port 9102
+```
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/v1/health`   | Liveness + dependency probe. `200` ready, `503` if a key dep (core import / trinity / chromium) is unavailable. Missing `OPENROUTER_API_KEY` does **not** 503. |
+| `POST` | `/v1/beautify` | `multipart/form-data` field `file` = input bundle zip → `application/zip` output. Failures return structured JSON (never a zip). |
+| `GET`  | `/v1/version`  | Engine/version info. |
+
+### Example
+
+```bash
+# build the bundled sample game into an input bundle
+python samples/build_sample_bundle.py            # -> samples/input_bundle.zip
+
+curl -sS -X POST http://localhost:9102/v1/beautify \
+  -H 'X-Kix-Request-Id: test-order-001' \
+  -H 'X-Kix-Engine: beauty_soul' \
+  -F 'file=@samples/input_bundle.zip' \
+  -o output.zip
+```
+
+`output.zip` always contains `index.html` at the root, every asset the final HTML
+references (including **source assets carried over from the input** — see §7.3),
+and `soul_report.json`. Before returning success the service runs an asset-integrity
+check (§7.4): if the final HTML/JS/CSS references a local asset missing from the
+output, it returns `asset_integrity_failed` JSON instead of a broken zip.
+
+### Docker
+
+```dockerfile
+# (excerpt — see Dockerfile)
+CMD ["uvicorn", "beauty_soul.server:app", "--host", "0.0.0.0", "--port", "9102"]
+```
+
+Run as a sidecar container in the KiX soul image; the worker calls it over the
+compose network at `http://beauty-soul-service:9102`.
+
+---
+
 ## Output Structure
 
 ```
