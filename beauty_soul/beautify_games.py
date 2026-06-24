@@ -1291,6 +1291,89 @@ def fix_css_issues(html: str) -> str:
 
     return inject_css(html_template, f"<style>\n{css.strip()}\n</style>")
 
+
+# ── Deterministic output fixes for KiX-reported defects ───────────────────────
+# These run once at finalization (after Pass 5). They follow the same philosophy
+# as fix_css_issues: targeted, idempotent, no-op when the pattern is absent.
+
+_VIEWPORT_FIX_SENTINEL = "kix-viewport-fix"
+
+
+def fix_viewport_scaling(html: str) -> str:
+    """P1 (§1): neutralize a source game's window-based fit() scaler when it conflicts
+    with the centered .app-container frame, which clips the game on wide viewports.
+
+    Detection (all required, else no-op): an element assigns `.style.transform` a
+    `translate(...) scale(...)` value, the script uses `innerWidth`, and logical-canvas
+    constants (LW/LH or LOGICAL_W/LOGICAL_H) are present. We then append a corrector
+    that recomputes the transform against the element's FRAME (.app-container) instead
+    of the window, and lock the element's logical size so the scale basis matches (§1.4).
+    A MutationObserver re-applies our transform after any write by the original fit(),
+    so it wins regardless of resize-listener ordering.
+    """
+    if _VIEWPORT_FIX_SENTINEL in html:
+        return html
+    if "innerWidth" not in html:
+        return html
+
+    m = re.search(r'(\w+)\.style\.transform\s*=\s*[`\'"][^`\'"]*translate\([^`\'"]*scale', html)
+    if not m:
+        return html
+    var = m.group(1)
+
+    idm = re.search(
+        rf'(?:const|let|var)\s+{re.escape(var)}\s*=\s*document\.getElementById\(\s*[\'"]([^\'"]+)[\'"]',
+        html)
+    if not idm:
+        return html
+    elem_id = idm.group(1)
+
+    lwm = re.search(r'\b(?:LW|LOGICAL_W|BASE_W)\s*=\s*(\d+)', html)
+    lhm = re.search(r'\b(?:LH|LOGICAL_H|BASE_H)\s*=\s*(\d+)', html)
+    if not (lwm and lhm):
+        return html
+    lw, lh = int(lwm.group(1)), int(lhm.group(1))
+
+    corrector = (
+        f"\n<style>/* {_VIEWPORT_FIX_SENTINEL} */"
+        f"#{elem_id}{{width:{lw}px !important;height:{lh}px !important;}}</style>\n"
+        f"<script>/* {_VIEWPORT_FIX_SENTINEL} */(function(){{"
+        f"var el=document.getElementById('{elem_id}');if(!el)return;"
+        f"var LW={lw},LH={lh};"
+        f"function refit(){{"
+        f"var f=el.closest('.app-container')||el.parentElement||document.documentElement;"
+        f"var fw=f.clientWidth,fh=f.clientHeight;if(!fw||!fh)return;"
+        f"var s=Math.min(fw/LW,fh/LH);var tx=(fw-LW*s)/2,ty=(fh-LH*s)/2;"
+        f"var want='translate('+tx+'px,'+ty+'px) scale('+s+')';"
+        f"if(el.style.transform!==want){{el.style.transformOrigin='top left';el.style.transform=want;}}"
+        f"}}"
+        f"try{{new MutationObserver(refit).observe(el,{{attributes:true,attributeFilter:['style']}});}}catch(e){{}}"
+        f"window.addEventListener('resize',refit);window.addEventListener('load',refit);"
+        f"if(document.readyState!=='loading')refit();else document.addEventListener('DOMContentLoaded',refit);"
+        f"}})();</script>\n"
+    )
+
+    if "</body>" in html:
+        return html.replace("</body>", corrector + "</body>", 1)
+    return html + corrector
+
+
+def strip_external_resources(html: str) -> str:
+    """P2 (§2): remove external-domain resource references so the output is CSP-clean
+    and fully offline. Strips external CSS @import rules and external <link> tags
+    (stylesheets / font preconnect). Local relative refs and font-family usage are kept.
+    """
+    # External CSS @import — e.g. @import url('https://fonts.googleapis.com/...');
+    html = re.sub(
+        r'@import\s+(?:url\(\s*)?[\'"]?https?://[^;]*?;',
+        '', html, flags=re.IGNORECASE)
+    # External <link> tags (stylesheet / preconnect / dns-prefetch to font/CDN hosts)
+    html = re.sub(
+        r'<link\b[^>]*\bhref\s*=\s*[\'"]https?://[^>]*?>',
+        '', html, flags=re.IGNORECASE)
+    return html
+
+
 _PASS1_REQUIRED_IDS = [
     "screen-home", "screen-game", "screen-gameover",
     "btn-start", "btn-playagain", "btn-home-game", "btn-pause-game", "pause-overlay",
@@ -2153,6 +2236,12 @@ def beautify(src_dir: Path, out_dir: Path | None = None) -> bool:
         save_prog()
     elif (out_dir / "index_pass5.html").exists():
         html = (out_dir / "index_pass5.html").read_text(encoding="utf-8")
+
+    # ── Finalize: deterministic output fixes (run before smoke so it validates them) ──
+    # P1: reconcile inherited window-based fit() with the centered .app-container frame
+    #     (clipping on wide viewports). P2: strip external font/CSS refs blocked by CSP.
+    html = fix_viewport_scaling(html)
+    html = strip_external_resources(html)
 
     # ── Pass 6: Playwright smoke test + error-driven retry ────────────────────
     smoke_result = prog.get("smoke_result")
